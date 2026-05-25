@@ -50,24 +50,6 @@ sub2api-usage print --period month --json
 
 数量统一用计算机领域的 K/M/G/T，耗时按 ms/s/min/h/d 自动选择最适合的尺度。
 
-## 开发
-
-```bash
-git clone https://github.com/kadaliao/sub2api-usage.git
-cd sub2api-usage
-uv sync
-uv run sub2api-usage --help
-```
-
-## 发布流程
-
-CI 在每次 push 都会构建包；推 `v*.*.*` tag 时通过 Trusted Publishing 自动发布到 PyPI。
-
-```bash
-git tag v0.1.0
-git push --tags
-```
-
 ## License
 
 [MIT](LICENSE)
