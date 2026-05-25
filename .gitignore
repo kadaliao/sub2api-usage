@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Build
+build/
+dist/
+*.egg-info/
+*.egg
+_version.py
+
+# venv
+.venv/
+venv/
+env/
+
+# uv
+.uv-cache/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*~
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# Local config that should never leak (this tool writes to ~/.config so OK,
+# but guard against accidental commit of test fixtures)
+config.json
+.env

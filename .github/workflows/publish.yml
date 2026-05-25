@@ -1,0 +1,43 @@
+name: Publish to PyPI
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/sub2api-usage
+    permissions:
+      id-token: write   # OIDC token for Trusted Publishing
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Build wheel + sdist
+        run: uv build
+
+      - name: Verify version matches tag
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          pkg_version=$(ls dist/sub2api_usage-*.tar.gz | sed -E 's|.*sub2api_usage-([^/]+)\.tar\.gz|\1|')
+          echo "tag=$tag built=$pkg_version"
+          if [[ "$tag" != "$pkg_version" ]]; then
+            echo "::error::tag $tag does not match built version $pkg_version" >&2
+            exit 1
+          fi
+
+      - name: Publish to PyPI (Trusted Publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1

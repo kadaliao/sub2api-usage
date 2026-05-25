@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sub2api-usage"
+dynamic = ["version"]
+description = "Interactive TUI for querying sub2api backend usage stats (Claude / OpenAI / Gemini)"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "Kada Liao", email = "kadaliao@gmail.com" }]
+keywords = ["sub2api", "tui", "cli", "usage", "claude", "openai", "gemini"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "httpx>=0.27",
+    "textual>=0.60",
+]
+
+[project.scripts]
+sub2api-usage = "sub2api_usage:main"
+
+[project.urls]
+Repository = "https://github.com/kadaliao/sub2api-usage"
+Issues = "https://github.com/kadaliao/sub2api-usage/issues"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "_version.py"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["sub2api_usage.py"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "sub2api_usage.py",
+    "README.md",
+    "LICENSE",
+    "pyproject.toml",
+]
