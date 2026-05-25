@@ -34,7 +34,7 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 
 # ===== Config =================================================================
 
-def load_config() -> Optional[dict[str, str]]:
+def load_config() -> Optional[dict[str, Any]]:
     if not CONFIG_FILE.exists():
         return None
     try:
@@ -43,13 +43,28 @@ def load_config() -> Optional[dict[str, str]]:
         return None
     if not isinstance(data, dict):
         return None
-    return data
+    if "profiles" not in data and "email" in data:
+        return {"default": "default", "profiles": {"default": data}}
+    if isinstance(data.get("profiles"), dict):
+        return data
+    return None
 
 
-def save_config(cfg: dict[str, str]) -> None:
+def save_config(cfg: dict[str, Any]) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
     CONFIG_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+
+def resolve_profile(cfg: dict[str, Any], name: Optional[str] = None) -> tuple[str, dict[str, str]]:
+    profiles = cfg.get("profiles") or {}
+    target = name or cfg.get("default")
+    if not target:
+        raise APIError("配置中没有可用 profile，请先运行 'sub2api-usage setup'")
+    if target not in profiles:
+        avail = ", ".join(profiles) or "(空)"
+        raise APIError(f"profile '{target}' 不存在；现有: {avail}")
+    return target, profiles[target]
 
 
 # ===== API client =============================================================
@@ -210,41 +225,60 @@ def _prompt(label: str, default: Optional[str] = None, secret: bool = False) -> 
         print("  请输入非空值")
 
 
-async def run_setup(existing: Optional[dict[str, str]] = None) -> dict[str, str]:
-    print()
-    if existing is None:
-        print("== sub2api-usage 首次配置 ==")
+async def run_setup(cfg: Optional[dict[str, Any]] = None, name: Optional[str] = None) -> dict[str, Any]:
+    cfg = cfg or {"default": "", "profiles": {}}
+    profiles: dict[str, dict[str, str]] = dict(cfg.get("profiles") or {})
+    profile_name = name or cfg.get("default") or "default"
+
+    if not profiles:
+        print("\n== sub2api-usage 首次配置 ==")
         print("(密码以明文保存到 ~/.config/sub2api-usage/config.json，文件权限 600)")
+    elif profile_name in profiles:
+        print(f"\n== 修改 profile: {profile_name} ==")
     else:
-        print("== sub2api-usage 修改配置 ==")
-        print(f"当前账号: {existing.get('email')}    地址: {existing.get('base_url')}")
+        print(f"\n== 新建 profile: {profile_name} ==")
+        print(f"  现有 profile: {', '.join(profiles)}")
     print()
 
-    base_url = _prompt("后台地址", default=(existing or {}).get("base_url") or DEFAULT_BASE_URL)
-    email = _prompt("邮箱", default=(existing or {}).get("email"))
-    if existing and existing.get("password"):
+    existing = profiles.get(profile_name) or {}
+    base_url = _prompt("后台地址", default=existing.get("base_url") or DEFAULT_BASE_URL)
+    email = _prompt("邮箱", default=existing.get("email"))
+    if existing.get("password"):
         pwd = getpass.getpass("密码 (回车保留原值): ").strip() or existing["password"]
     else:
         pwd = _prompt("密码", secret=True)
-    tz = _prompt("时区", default=(existing or {}).get("timezone") or DEFAULT_TIMEZONE)
+    tz = _prompt("时区", default=existing.get("timezone") or DEFAULT_TIMEZONE)
 
-    cfg = {"base_url": base_url, "email": email, "password": pwd, "timezone": tz}
+    entry = {"base_url": base_url, "email": email, "password": pwd, "timezone": tz}
 
     print("\n登录验证中...")
     client = Client(base_url, email, pwd, tz)
+    login_err: Optional[APIError] = None
     try:
         await client.login()
     except APIError as e:
-        print(f"[失败] {e}", file=sys.stderr)
-        if input("是否重新输入？[Y/n] ").strip().lower() in ("", "y", "yes"):
-            await client.aclose()
-            return await run_setup(cfg)
+        login_err = e
+    finally:
         await client.aclose()
+
+    if login_err is not None:
+        print(f"[失败] {login_err}", file=sys.stderr)
+        if input("是否重新输入？[Y/n] ").strip().lower() in ("", "y", "yes"):
+            profiles[profile_name] = entry
+            return await run_setup({"default": cfg.get("default") or "", "profiles": profiles}, profile_name)
         raise SystemExit(1)
-    await client.aclose()
-    save_config(cfg)
-    print(f"[OK] 已保存到 {CONFIG_FILE}\n")
-    return cfg
+
+    profiles[profile_name] = entry
+    new_cfg = {
+        "default": cfg.get("default") or profile_name,
+        "profiles": profiles,
+    }
+    save_config(new_cfg)
+    print(f"[OK] profile '{profile_name}' 已保存到 {CONFIG_FILE}")
+    if len(profiles) > 1 and new_cfg["default"] != profile_name:
+        print(f"     当前 default 仍是 '{new_cfg['default']}' (用 'sub2api-usage profiles use {profile_name}' 切换)")
+    print()
+    return new_cfg
 
 
 # ===== Non-interactive print mode ============================================
@@ -451,13 +485,62 @@ def run_tui(cfg: dict[str, str]) -> None:
     UsageApp(cfg).run()
 
 
+# ===== Profile management =====================================================
+
+def cmd_profiles_list(cfg: dict[str, Any]) -> int:
+    profiles = cfg.get("profiles") or {}
+    if not profiles:
+        print("(无 profile，先运行 'sub2api-usage setup')")
+        return 0
+    default = cfg.get("default")
+    name_w = max(len(n) for n in profiles)
+    email_w = max(len(p.get("email", "")) for p in profiles.values())
+    for n, p in profiles.items():
+        marker = "*" if n == default else " "
+        print(f"  {marker} {n:<{name_w}}  {p.get('email', ''):<{email_w}}  {p.get('base_url', '')}")
+    print(f"\n* = default ({default})")
+    return 0
+
+
+def cmd_profiles_use(cfg: dict[str, Any], name: str) -> int:
+    profiles = cfg.get("profiles") or {}
+    if name not in profiles:
+        print(f"[错误] profile '{name}' 不存在；现有: {', '.join(profiles) or '(空)'}", file=sys.stderr)
+        return 1
+    cfg["default"] = name
+    save_config(cfg)
+    print(f"default 已切换到 '{name}'")
+    return 0
+
+
+def cmd_profiles_remove(cfg: dict[str, Any], name: str) -> int:
+    profiles = dict(cfg.get("profiles") or {})
+    if name not in profiles:
+        print(f"[错误] profile '{name}' 不存在", file=sys.stderr)
+        return 1
+    if input(f"确认删除 profile '{name}' ? [y/N] ").strip().lower() not in ("y", "yes"):
+        print("取消")
+        return 0
+    del profiles[name]
+    cfg["profiles"] = profiles
+    if cfg.get("default") == name:
+        cfg["default"] = next(iter(profiles), "")
+        if cfg["default"]:
+            print(f"  顺便把 default 切到了 '{cfg['default']}'")
+    save_config(cfg)
+    print(f"已删除 profile '{name}'")
+    return 0
+
+
 # ===== CLI ====================================================================
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="sub2api 用量查询")
+    p.add_argument("-P", "--profile", help="使用指定的 profile (默认: 配置里的 default)")
     sub = p.add_subparsers(dest="cmd")
 
-    sub.add_parser("setup", help="(重新) 配置账号信息")
+    sp = sub.add_parser("setup", help="(重新) 配置账号信息")
+    sp.add_argument("name", nargs="?", help="profile 名称，省略则更新当前 default")
 
     pp = sub.add_parser("print", help="非交互打印 (脚本/管道用)")
     pp.add_argument("--period", default="today", choices=[k for k, _ in PERIODS])
@@ -465,31 +548,65 @@ def build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--page", type=int, default=1)
     pp.add_argument("--page-size", type=int, default=20)
     pp.add_argument("--json", action="store_true")
+
+    pf = sub.add_parser("profiles", help="管理 profile (多账号/多后台)")
+    pf_sub = pf.add_subparsers(dest="action")
+    pf_sub.add_parser("list", help="列出所有 profile")
+    pu = pf_sub.add_parser("use", help="切换 default profile")
+    pu.add_argument("name")
+    prm = pf_sub.add_parser("remove", help="删除 profile")
+    prm.add_argument("name")
     return p
 
 
 def main() -> int:
+    try:
+        return _main()
+    except KeyboardInterrupt:
+        print("\n已中断", file=sys.stderr)
+        return 130
+
+
+def _main() -> int:
     args = build_parser().parse_args()
     cfg = load_config()
 
     if args.cmd == "setup":
-        asyncio.run(run_setup(cfg))
+        asyncio.run(run_setup(cfg, args.name))
+        return 0
+
+    if args.cmd == "profiles":
+        if cfg is None:
+            print("还没有任何 profile，先运行 'sub2api-usage setup'", file=sys.stderr)
+            return 1
+        action = args.action or "list"
+        if action == "list":
+            return cmd_profiles_list(cfg)
+        if action == "use":
+            return cmd_profiles_use(cfg, args.name)
+        if action == "remove":
+            return cmd_profiles_remove(cfg, args.name)
         return 0
 
     if cfg is None:
         print("未检测到配置，进入引导...")
         cfg = asyncio.run(run_setup(None))
 
+    try:
+        _, profile = resolve_profile(cfg, args.profile)
+    except APIError as e:
+        print(f"[错误] {e}", file=sys.stderr)
+        return 2
+
     if args.cmd == "print":
         try:
-            asyncio.run(cmd_print(cfg, args.period, args.list, args.page, args.page_size, args.json))
+            asyncio.run(cmd_print(profile, args.period, args.list, args.page, args.page_size, args.json))
         except APIError as e:
             print(f"[错误] {e}", file=sys.stderr)
             return 1
         return 0
 
-    # default: TUI
-    run_tui(cfg)
+    run_tui(profile)
     return 0
 
 
