@@ -755,24 +755,18 @@ def _account_5h_window(account: dict[str, Any], usage: Optional[dict[str, Any]] 
     return _format_used_limit(win, lim)
 
 
-def _account_quota_window(account: dict[str, Any], usage: Optional[dict[str, Any]] = None) -> str:
-    """账号 7d / quota 窗口。
-    优先 UsageInfo.seven_day → seven_day_sonnet → Gemini daily → 账号 quota_weekly/quota_daily/quota。
+def _account_seven_day_window(account: dict[str, Any], usage: Optional[dict[str, Any]] = None) -> str:
+    """账号 7d 窗口（Anthropic OAuth seven_day / seven_day_sonnet，或 Gemini daily 平替）。
+
+    账户级别只有 5h 和 7d 两类滑动窗口。Gemini 没有 7d 概念，用各自的 daily 顶替显示。
+    quota_* 字段是 key/订阅级配额，不属于账户窗口，这里不再回退。
     """
-    if usage:
-        for key in ("seven_day", "seven_day_sonnet", "gemini_shared_daily", "gemini_pro_daily", "gemini_flash_daily"):
-            progress = usage.get(key)
-            if progress:
-                return _format_progress(progress)
-    for used_key, lim_key in (
-        ("quota_weekly_used", "quota_weekly_limit"),
-        ("quota_daily_used", "quota_daily_limit"),
-        ("quota_used", "quota_limit"),
-    ):
-        used, lim = account.get(used_key), account.get(lim_key)
-        if used is None and lim is None:
-            continue
-        return _format_used_limit(used, lim)
+    if not usage:
+        return "-"
+    for key in ("seven_day", "seven_day_sonnet", "gemini_shared_daily", "gemini_pro_daily", "gemini_flash_daily"):
+        progress = usage.get(key)
+        if progress:
+            return _format_progress(progress)
     return "-"
 
 
@@ -907,7 +901,7 @@ def _print_admin_accounts(
     print(f"\n== 上游账户 ({len(items)}) ==")
     header = (
         f"{'name':<22} {'platform':<10} {'type':<14} {'status':<10} "
-        f"{'5h window':<26} {'7d / quota':<26} "
+        f"{'5h window':<26} {'7d window':<26} "
         f"{'today req':>9} {'today tok':>10} {'today cost':>10} "
         f"{'concur':>7} {'sess/rpm':<16} {'last used':<19}"
     )
@@ -922,7 +916,7 @@ def _print_admin_accounts(
             f"{(a.get('type') or '')[:14]:<14} "
             f"{(a.get('status') or '')[:10]:<10} "
             f"{_account_5h_window(a, usage)[:26]:<26} "
-            f"{_account_quota_window(a, usage)[:26]:<26} "
+            f"{_account_seven_day_window(a, usage)[:26]:<26} "
             f"{humanize_count(st.get('requests') or 0):>9} "
             f"{humanize_count(st.get('tokens') or 0):>10} "
             f"{humanize_money(st.get('cost') or 0):>10} "
@@ -1322,7 +1316,7 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
                     cursor_foreground_priority="renderable",
                 )
                 acc_tbl.add_columns(
-                    "名称", "平台", "类型", "状态", "5h 窗口", "日/周 Quota",
+                    "名称", "平台", "类型", "状态", "5h 窗口", "7d 窗口",
                     "今日请求", "今日 Token", "今日成本", "并发", "Sess·RPM", "最后使用",
                 )
                 yield acc_tbl
@@ -1565,7 +1559,7 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
                     styled((a.get("type") or "")[:14], "dim"),
                     status_cell(a.get("status"), 10),
                     window_cell(_account_5h_window(a, usage), 28),
-                    window_cell(_account_quota_window(a, usage), 28),
+                    window_cell(_account_seven_day_window(a, usage), 28),
                     count_cell(st.get("requests")),
                     count_cell(st.get("tokens")),
                     cost_cell(st.get("cost")),
