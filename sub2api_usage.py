@@ -660,6 +660,7 @@ def run_tui(cfg: dict[str, str]) -> None:
 # ===== Admin print ============================================================
 
 ADMIN_VIEWS = ("dashboard", "accounts", "users", "subscriptions")
+ACCOUNT_WINDOW_COL_WIDTH = 42
 
 
 def _last_used_short(ts: Any) -> str:
@@ -722,6 +723,47 @@ def _format_used_limit(used: Optional[float], limit: Optional[float]) -> str:
     return f"{humanize_money(used or 0)} / {humanize_money(limit)} ({pct:.0f}%)"
 
 
+_WINDOW_DEADLINE_FIELDS = (
+    "end_time",
+    "end_at",
+    "ends_at",
+    "window_end",
+    "window_end_at",
+    "period_end",
+    "period_end_at",
+    "reset_at",
+    "reset_time",
+    "resets_at",
+    "next_reset_at",
+    "rate_limit_reset_at",
+    "session_window_end",
+)
+
+
+def _window_deadline_short(ts: Any) -> str:
+    dt = _parse_iso(ts)
+    if dt is None:
+        return ""
+    return dt.strftime("%m-%d %H:%M")
+
+
+def _pick_window_deadline(*sources: Optional[dict[str, Any]]) -> str:
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for field in _WINDOW_DEADLINE_FIELDS:
+            short = _window_deadline_short(source.get(field))
+            if short:
+                return short
+    return ""
+
+
+def _append_window_deadline(rendered: str, deadline: str) -> str:
+    if not deadline or rendered == "-":
+        return rendered
+    return f"{rendered} · 至 {deadline}"
+
+
 def _format_progress(progress: dict[str, Any], limit: Optional[float] = None) -> str:
     """格式化 UsageProgress (five_hour / seven_day) 为 '${cost} / ${limit} (util%)'。"""
     util = progress.get("utilization")
@@ -738,7 +780,8 @@ def _format_progress(progress: dict[str, Any], limit: Optional[float] = None) ->
         parts.append(f"/ {humanize_money(limit)}")
     if util is not None:
         parts.append(f"({float(util):.0f}%)")
-    return " ".join(parts) if parts else "-"
+    rendered = " ".join(parts) if parts else "-"
+    return _append_window_deadline(rendered, _pick_window_deadline(progress, stats))
 
 
 def _account_5h_window(account: dict[str, Any], usage: Optional[dict[str, Any]] = None) -> str:
@@ -752,7 +795,8 @@ def _account_5h_window(account: dict[str, Any], usage: Optional[dict[str, Any]] 
     lim = account.get("window_cost_limit")
     if win is None and lim is None:
         return "-"
-    return _format_used_limit(win, lim)
+    rendered = _format_used_limit(win, lim)
+    return _append_window_deadline(rendered, _pick_window_deadline(account))
 
 
 def _account_seven_day_window(account: dict[str, Any], usage: Optional[dict[str, Any]] = None) -> str:
@@ -901,7 +945,7 @@ def _print_admin_accounts(
     print(f"\n== 上游账户 ({len(items)}) ==")
     header = (
         f"{'name':<22} {'platform':<10} {'type':<14} {'status':<10} "
-        f"{'5h window':<26} {'7d window':<26} "
+        f"{'5h window':<{ACCOUNT_WINDOW_COL_WIDTH}} {'7d window':<{ACCOUNT_WINDOW_COL_WIDTH}} "
         f"{'today req':>9} {'today tok':>10} {'today cost':>10} "
         f"{'concur':>7} {'sess/rpm':<16} {'last used':<19}"
     )
@@ -915,8 +959,8 @@ def _print_admin_accounts(
             f"{(a.get('platform') or '')[:10]:<10} "
             f"{(a.get('type') or '')[:14]:<14} "
             f"{(a.get('status') or '')[:10]:<10} "
-            f"{_account_5h_window(a, usage)[:26]:<26} "
-            f"{_account_seven_day_window(a, usage)[:26]:<26} "
+            f"{_account_5h_window(a, usage)[:ACCOUNT_WINDOW_COL_WIDTH]:<{ACCOUNT_WINDOW_COL_WIDTH}} "
+            f"{_account_seven_day_window(a, usage)[:ACCOUNT_WINDOW_COL_WIDTH]:<{ACCOUNT_WINDOW_COL_WIDTH}} "
             f"{humanize_count(st.get('requests') or 0):>9} "
             f"{humanize_count(st.get('tokens') or 0):>10} "
             f"{humanize_money(st.get('cost') or 0):>10} "
@@ -1204,7 +1248,7 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
         s = (str(value or "") or "-")[:width]
         return styled(s, _status_style(value))
 
-    def window_cell(rendered: str, max_width: int = 28) -> Text:
+    def window_cell(rendered: str, max_width: int = ACCOUNT_WINDOW_COL_WIDTH) -> Text:
         util = _extract_util(rendered)
         return styled(rendered[:max_width], _util_style(util))
 
@@ -1558,8 +1602,8 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
                     styled((a.get("platform") or "")[:10], "cyan"),
                     styled((a.get("type") or "")[:14], "dim"),
                     status_cell(a.get("status"), 10),
-                    window_cell(_account_5h_window(a, usage), 28),
-                    window_cell(_account_seven_day_window(a, usage), 28),
+                    window_cell(_account_5h_window(a, usage), ACCOUNT_WINDOW_COL_WIDTH),
+                    window_cell(_account_seven_day_window(a, usage), ACCOUNT_WINDOW_COL_WIDTH),
                     count_cell(st.get("requests")),
                     count_cell(st.get("tokens")),
                     cost_cell(st.get("cost")),

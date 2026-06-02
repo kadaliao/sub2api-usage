@@ -115,7 +115,7 @@ Subscriptions 视图：
 ### 视图
 
 - **Dashboard**：今日 / 累计请求与成本、用户数、上游账户分类计数 (正常/异常/限流/过载)、RPM/TPM、平均耗时、运行时长，以及当前时段模型 Top。
-- **Accounts**：所有上游账户列表，含 5h 窗口 (`current_window_cost` / `window_cost_limit`)、日/周 Quota (`quota_daily/weekly_*`)、今日请求 / Token / 成本、当前并发、活跃会话/RPM、最后使用时间。
+- **Accounts**：所有上游账户列表，含 5h 窗口 (`current_window_cost` / `window_cost_limit`) 与 7d 窗口用量、窗口截止时间、今日请求 / Token / 成本、当前并发、活跃会话/RPM、最后使用时间。
 - **Users**：用户消费排行，**今天 / 昨天 / 7 天 / 30 天 / 全部** 五列实际成本并排展示，默认按今日倒序。当前排序列在表头标注 `↓` 或 `↑`，方括号里是该列的快捷键。
 - **Subscriptions**：管理员订阅列表，默认只显示 `active`，可用 `S` 切换状态、`o` 或快捷键切换排序。含用户、分组、状态、日/周/月用量与对应分组限额、到期时间与剩余天数。
 
