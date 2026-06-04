@@ -8,12 +8,12 @@ import sub2api_usage
 
 
 class CliDefaultTests(unittest.TestCase):
-    def test_default_period_is_week(self):
+    def test_default_period_is_today(self):
         parser = sub2api_usage.build_parser()
 
         args = parser.parse_args(["print"])
 
-        self.assertEqual(args.period, "week")
+        self.assertEqual(args.period, "today")
 
     def test_missing_config_in_non_interactive_mode_returns_clear_error(self):
         err = StringIO()

@@ -348,7 +348,7 @@ PERIODS = (
     ("month", "30 天"),
     ("all", "全部"),
 )
-DEFAULT_PERIOD = "week"
+DEFAULT_PERIOD = "today"
 
 
 def period_range(period: str) -> tuple[str, str]:
