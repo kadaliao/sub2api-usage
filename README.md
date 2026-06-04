@@ -5,7 +5,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/sub2api-usage.svg)](https://pypi.org/project/sub2api-usage/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-[sub2api](https://github.com/Wei-Shaw/sub2api) 后台用量查询的命令行工具。终端里直接看请求数、Token、成本、明细，支持今天 / 7 天 / 30 天 / 全部切换。
+[sub2api](https://github.com/Wei-Shaw/sub2api) 后台用量查询的命令行工具。终端里直接看请求数、Token、成本、明细，默认展示最近 7 天，支持今天 / 7 天 / 30 天 / 全部切换。
 
 ## 安装
 
@@ -25,12 +25,14 @@ pip install sub2api-usage
 ```bash
 # 首次运行会引导填写账号、密码、后台地址、时区，
 # 配置保存到 ~/.config/sub2api-usage/config.json (chmod 600)
+# 默认打开最近 7 天视图
 sub2api-usage
 
 # 重新配置账号
 sub2api-usage setup
 
 # 非交互打印 (脚本 / 管道用)
+# 默认打印最近 7 天；用 --period today 可只看今天
 sub2api-usage print
 sub2api-usage print --period week --list --page-size 20
 sub2api-usage print --period month --json

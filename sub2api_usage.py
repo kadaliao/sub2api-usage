@@ -348,6 +348,7 @@ PERIODS = (
     ("month", "30 天"),
     ("all", "全部"),
 )
+DEFAULT_PERIOD = "week"
 
 
 def period_range(period: str) -> tuple[str, str]:
@@ -547,7 +548,7 @@ def run_tui(cfg: dict[str, str]) -> None:
             Binding("4", "set_period('all')", "全部"),
         ]
 
-        period = "today"
+        period = DEFAULT_PERIOD
         page = 1
         page_size = 50
 
@@ -563,6 +564,7 @@ def run_tui(cfg: dict[str, str]) -> None:
                 Tab("7 天 (2)", id="week"),
                 Tab("30 天 (3)", id="month"),
                 Tab("全部 (4)", id="all"),
+                active=DEFAULT_PERIOD,
             )
             yield Static("加载中...", id="stats")
             table: DataTable = DataTable(id="table", zebra_stripes=True, cursor_type="row")
@@ -1757,7 +1759,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("name", nargs="?", help="profile 名称，省略则更新当前 default")
 
     pp = sub.add_parser("print", help="非交互打印 (脚本/管道用)")
-    pp.add_argument("--period", default="today", choices=[k for k, _ in PERIODS])
+    pp.add_argument("--period", default=DEFAULT_PERIOD, choices=[k for k, _ in PERIODS])
     pp.add_argument("--list", action="store_true", help="同时拉取明细")
     pp.add_argument("--page", type=int, default=1)
     pp.add_argument("--page-size", type=int, default=20)
@@ -1811,6 +1813,15 @@ def main() -> int:
         return 130
 
 
+def _can_prompt() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _missing_config_error(setup_cmd: str) -> int:
+    print(f"未检测到配置；请先运行 '{setup_cmd}' 完成初始化。", file=sys.stderr)
+    return 1
+
+
 def _main() -> int:
     args = build_parser().parse_args()
     cfg = load_config()
@@ -1836,6 +1847,8 @@ def _main() -> int:
         return _admin_main(args, cfg)
 
     if cfg is None:
+        if not _can_prompt():
+            return _missing_config_error("sub2api-usage setup")
         print("未检测到配置，进入引导...")
         cfg = asyncio.run(run_setup(None))
 
@@ -1881,6 +1894,8 @@ def _admin_main(args: argparse.Namespace, cfg: Optional[dict[str, Any]]) -> int:
         return 0
 
     if cfg is None or not (cfg.get("admin_profiles") or {}):
+        if not _can_prompt():
+            return _missing_config_error("sub2api-usage admin setup")
         print("未检测到 admin 配置，进入引导...")
         cfg = asyncio.run(run_setup(cfg or {}, None, namespace="admin_profiles"))
 
