@@ -17,6 +17,7 @@ import asyncio
 import getpass
 import json
 import os
+import re
 import stat
 import sys
 from datetime import date, datetime, timedelta
@@ -1139,6 +1140,30 @@ def _sort_subscriptions(items: list[dict[str, Any]], sort_by: str) -> list[dict[
     return sorted(items, key=_sub_sort_key(sort_by))
 
 
+def _search_plain(value: Any) -> str:
+    if hasattr(value, "plain"):
+        return str(value.plain)
+    return str(value or "")
+
+
+def _row_matches_search(values: list[Any], query: str) -> bool:
+    needle = query.strip().casefold()
+    if not needle:
+        return True
+    return any(needle in _search_plain(value).casefold() for value in values)
+
+
+def _highlight_search_text(value: Any, query: str):
+    if not query.strip():
+        return value
+    from rich.text import Text
+
+    text = value.copy() if isinstance(value, Text) else Text(_search_plain(value))
+    pattern = re.escape(query.strip())
+    text.highlight_regex(f"(?i){pattern}", "black on yellow")
+    return text
+
+
 # ----- Color helpers (used by Admin TUI) ---------------------------------------
 
 _STATUS_COLORS = {
@@ -1235,11 +1260,12 @@ def _print_admin_subscriptions(
 # ===== Admin TUI ==============================================================
 
 def run_admin_tui(cfg: dict[str, str]) -> None:
+    from rich.markup import escape
     from rich.text import Text
     from textual.app import App, ComposeResult
     from textual.binding import Binding
     from textual.containers import VerticalScroll
-    from textual.widgets import ContentSwitcher, DataTable, Footer, Header, Static, Tab, Tabs
+    from textual.widgets import ContentSwitcher, DataTable, Footer, Header, Input, Static, Tab, Tabs
 
     PERIOD_LABELS = {"today": "今天", "yesterday": "昨天", "week": "7 天", "month": "30 天", "all": "全部"}
 
@@ -1306,6 +1332,13 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
         DataTable > .datatable--cursor {
             background: $accent 40%;
         }
+        #search {
+            margin: 0 1;
+            height: 3;
+        }
+        #search.search-hidden {
+            display: none;
+        }
         #status {
             dock: bottom;
             height: 1;
@@ -1317,6 +1350,7 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
         """
         BINDINGS = [
             Binding("q", "quit", "退出"),
+            Binding("/", "start_search", "搜索", show=False),
             Binding("r", "refresh", "刷新"),
             Binding("d", "set_view('dashboard')", "Dashboard"),
             Binding("a", "set_view('accounts')", "账户"),
@@ -1346,6 +1380,9 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
             self.client = Client(cfg["base_url"], cfg["email"], cfg["password"], cfg["timezone"])
             self._users_cache: list[dict[str, Any]] = []
             self._users_totals: dict[str, dict[str, float]] = {}
+            self._subscriptions_cache: dict[str, Any] = {}
+            self.search_query = ""
+            self.searching = False
 
         def compose(self) -> ComposeResult:
             yield Header(show_clock=True)
@@ -1382,6 +1419,7 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
                     "ID [i]", "用户 [e]", "分组", "状态", "日 [1]", "周 [3]", "月 [4]", "到期 [x]",
                 )
                 yield sub_tbl
+            yield Input(placeholder="/ 搜索当前 Users/Subscriptions", id="search", compact=True, classes="search-hidden")
             yield Static(f"管理员 {self.cfg['email']}  ·  {self.cfg['base_url']}", id="status")
             yield Footer()
 
@@ -1395,10 +1433,89 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
             if tab_id and tab_id != self.view:
                 self.view = tab_id
                 self.query_one("#switcher", ContentSwitcher).current = f"{tab_id}_view"
+                self._stop_search(focus_table=False)
                 await self._refresh_data()
+
+        def _search_enabled(self) -> bool:
+            return self.view in {"users", "subscriptions"}
+
+        def _match_count(self) -> int:
+            if not self.search_query.strip():
+                return 0
+            if self.view == "users":
+                return sum(
+                    1
+                    for u in self._users_cache
+                    if _row_matches_search(self._user_search_values(u), self.search_query)
+                )
+            if self.view == "subscriptions":
+                return sum(
+                    1
+                    for sub in self._subscriptions_cache.get("items") or []
+                    if _row_matches_search(self._subscription_search_values(sub), self.search_query)
+                )
+            return 0
+
+        def _search_suffix(self) -> str:
+            if not self._search_enabled():
+                return ""
+            if self.search_query.strip():
+                query = escape(self.search_query)
+                return f" · 搜索 [b yellow]/{query}[/] ({self._match_count()} 条) · [dim]/[/]编辑 [dim]Esc[/]清除"
+            return " · [dim]/[/]搜索"
+
+        def _stop_search(self, focus_table: bool = True) -> None:
+            self.searching = False
+            search = self.query_one("#search", Input)
+            search.add_class("search-hidden")
+            if focus_table and self._search_enabled():
+                self.set_focus(self.query_one(f"#{self.view}_view", DataTable))
+
+        async def action_start_search(self) -> None:
+            if not self._search_enabled():
+                return
+            self.searching = True
+            search = self.query_one("#search", Input)
+            search.value = self.search_query
+            search.remove_class("search-hidden")
+            self.set_focus(search)
+            self._update_status_hint()
+
+        async def on_input_changed(self, event: Input.Changed) -> None:
+            if event.input.id != "search":
+                return
+            self.search_query = event.value
+            if self.view == "users":
+                self._render_users(self._users_cache, self._users_totals)
+            elif self.view == "subscriptions":
+                self._render_subscriptions(self._subscriptions_cache)
+            self._update_status_hint()
+
+        async def on_input_submitted(self, event: Input.Submitted) -> None:
+            if event.input.id == "search":
+                self._stop_search()
+                self._update_status_hint()
+
+        async def on_key(self, event) -> None:
+            if event.key == "escape" and self._clear_search():
+                event.stop()
 
         async def action_set_view(self, v: str) -> None:
             self.query_one(Tabs).active = v
+
+        def _clear_search(self) -> bool:
+            if not self._search_enabled() or (not self.searching and not self.search_query):
+                return False
+            self.search_query = ""
+            search = self.query_one("#search", Input)
+            search.value = ""
+            self._stop_search()
+            if self.view == "users":
+                self._render_users(self._users_cache, self._users_totals)
+            elif self.view == "subscriptions":
+                self._render_subscriptions(self._subscriptions_cache)
+            self._update_status_hint()
+            return True
 
         async def action_set_period(self, p: str) -> None:
             if self.view == "users":
@@ -1482,7 +1599,7 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
                 )
             self.query_one("#status", Static).update(
                 f"管理员 [b cyan]{self.cfg['email']}[/]  ·  "
-                f"[dim]{start} ~ {end}[/] ([magenta]{PERIOD_LABELS[self.period]}[/])  ·  {hint}"
+                f"[dim]{start} ~ {end}[/] ([magenta]{PERIOD_LABELS[self.period]}[/])  ·  {hint}{self._search_suffix()}"
             )
 
         async def _refresh_data(self) -> None:
@@ -1526,6 +1643,7 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
                         page=1, page_size=200, status=status_filter,
                     )
                     data["items"] = _sort_subscriptions(data.get("items") or [], self.sub_sort_by)
+                    self._subscriptions_cache = data
                     self._render_subscriptions(data)
             except APIError as e:
                 status.update(f"[red]错误: {e}[/]")
@@ -1641,18 +1759,21 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
                 lbl("all", "全部 [5]"),
             )
             for i, u in enumerate(_sort_users(items, cur), 1):
+                if not _row_matches_search(self._user_search_values(u), self.search_query):
+                    continue
                 rank_style = "bold yellow" if i <= 3 else "dim"
                 tbl.add_row(
-                    styled(str(i), rank_style),
-                    styled((u.get("email") or "")[:32], "cyan"),
-                    cost_cell(u.get("today_cost")),
-                    cost_cell(u.get("yesterday_cost")),
-                    cost_cell(u.get("week_cost")),
-                    cost_cell(u.get("month_cost")),
-                    cost_cell(u.get("all_cost")),
+                    _highlight_search_text(styled(str(i), rank_style), self.search_query),
+                    _highlight_search_text(styled((u.get("email") or "")[:32], "cyan"), self.search_query),
+                    _highlight_search_text(cost_cell(u.get("today_cost")), self.search_query),
+                    _highlight_search_text(cost_cell(u.get("yesterday_cost")), self.search_query),
+                    _highlight_search_text(cost_cell(u.get("week_cost")), self.search_query),
+                    _highlight_search_text(cost_cell(u.get("month_cost")), self.search_query),
+                    _highlight_search_text(cost_cell(u.get("all_cost")), self.search_query),
                 )
 
         def _render_subscriptions(self, data: dict[str, Any]) -> None:
+            self._subscriptions_cache = data
             tbl = self.query_one("#subscriptions_view", DataTable)
             tbl.clear(columns=True)
             cur = self.sub_sort_by
@@ -1674,16 +1795,51 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
                 lbl("expires_at", "到期 [x]"),
             )
             for sub in data.get("items") or []:
+                if not _row_matches_search(self._subscription_search_values(sub), self.search_query):
+                    continue
                 tbl.add_row(
-                    styled(str(sub.get("id", "")), "dim"),
-                    styled(_subscription_user_label(sub), "cyan"),
-                    styled(_subscription_group_label(sub), "magenta"),
-                    status_cell(sub.get("status"), 10),
-                    window_cell(_subscription_window_cell(sub, "daily_usage_usd", "daily_limit_usd"), 26),
-                    window_cell(_subscription_window_cell(sub, "weekly_usage_usd", "weekly_limit_usd"), 26),
-                    window_cell(_subscription_window_cell(sub, "monthly_usage_usd", "monthly_limit_usd"), 26),
-                    expires_cell(sub.get("expires_at")),
+                    _highlight_search_text(styled(str(sub.get("id", "")), "dim"), self.search_query),
+                    _highlight_search_text(styled(_subscription_user_label(sub), "cyan"), self.search_query),
+                    _highlight_search_text(styled(_subscription_group_label(sub), "magenta"), self.search_query),
+                    _highlight_search_text(status_cell(sub.get("status"), 10), self.search_query),
+                    _highlight_search_text(
+                        window_cell(_subscription_window_cell(sub, "daily_usage_usd", "daily_limit_usd"), 26),
+                        self.search_query,
+                    ),
+                    _highlight_search_text(
+                        window_cell(_subscription_window_cell(sub, "weekly_usage_usd", "weekly_limit_usd"), 26),
+                        self.search_query,
+                    ),
+                    _highlight_search_text(
+                        window_cell(_subscription_window_cell(sub, "monthly_usage_usd", "monthly_limit_usd"), 26),
+                        self.search_query,
+                    ),
+                    _highlight_search_text(expires_cell(sub.get("expires_at")), self.search_query),
                 )
+
+        @staticmethod
+        def _user_search_values(u: dict[str, Any]) -> list[Any]:
+            return [
+                u.get("email") or "",
+                humanize_money(u.get("today_cost") or 0),
+                humanize_money(u.get("yesterday_cost") or 0),
+                humanize_money(u.get("week_cost") or 0),
+                humanize_money(u.get("month_cost") or 0),
+                humanize_money(u.get("all_cost") or 0),
+            ]
+
+        @staticmethod
+        def _subscription_search_values(sub: dict[str, Any]) -> list[Any]:
+            return [
+                str(sub.get("id", "")),
+                _subscription_user_label(sub),
+                _subscription_group_label(sub),
+                str(sub.get("status") or ""),
+                _subscription_window_cell(sub, "daily_usage_usd", "daily_limit_usd"),
+                _subscription_window_cell(sub, "weekly_usage_usd", "weekly_limit_usd"),
+                _subscription_window_cell(sub, "monthly_usage_usd", "monthly_limit_usd"),
+                _expires_short(sub.get("expires_at")),
+            ]
 
         async def on_unmount(self) -> None:
             await self.client.aclose()
