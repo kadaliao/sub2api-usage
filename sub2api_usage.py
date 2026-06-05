@@ -1214,7 +1214,7 @@ def _handle_admin_search_key(
     if not active:
         return active, query, "ignored"
     if key == "enter":
-        return False, query, "committed"
+        return False, "", "committed"
     if key == "backspace":
         return True, query[:-1], "changed"
     if character and len(character) == 1:
@@ -1545,7 +1545,7 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
                 return
             self.searching = active
             self.search_query = query
-            if action in {"changed", "cleared"}:
+            if action in {"changed", "committed", "cleared"}:
                 self._rerender_search_view()
             self._update_status_hint()
             if was_searching != self.searching:

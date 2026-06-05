@@ -75,9 +75,9 @@ class AdminSearchTests(unittest.TestCase):
         self.assertEqual(query, "alic")
         self.assertEqual(action, "changed")
 
-    def test_handle_admin_search_key_enters_and_commits_without_changing_query(self):
+    def test_handle_admin_search_key_enter_commits_and_clears_query(self):
         self.assertEqual(_handle_admin_search_key(False, "", "/", "/"), (True, "", "started"))
-        self.assertEqual(_handle_admin_search_key(True, "alice", "enter", None), (False, "alice", "committed"))
+        self.assertEqual(_handle_admin_search_key(True, "alice", "enter", None), (False, "", "committed"))
 
     def test_handle_admin_search_key_escape_clears_query(self):
         self.assertEqual(_handle_admin_search_key(True, "alice", "escape", None), (False, "", "cleared"))
@@ -116,6 +116,11 @@ class AdminSearchTests(unittest.TestCase):
         source = Path(__file__).resolve().parents[1].joinpath("sub2api_usage.py").read_text()
 
         self.assertIn("self.set_focus(None)", source)
+
+    def test_admin_search_commit_rerenders_view_to_clear_highlights(self):
+        source = Path(__file__).resolve().parents[1].joinpath("sub2api_usage.py").read_text()
+
+        self.assertIn('if action in {"changed", "committed", "cleared"}:', source)
 
     def test_admin_tui_search_does_not_render_input_widget(self):
         source = Path(__file__).resolve().parents[1].joinpath("sub2api_usage.py").read_text()
