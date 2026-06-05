@@ -4,6 +4,8 @@ from pathlib import Path
 from rich.text import Text
 
 from sub2api_usage import (
+    _admin_search_allows_action,
+    _admin_search_status_line,
     _admin_search_suffix,
     _handle_admin_search_key,
     _highlight_search_cells,
@@ -60,6 +62,12 @@ class AdminSearchTests(unittest.TestCase):
         self.assertIn("搜索 [b yellow]alice@example.com[/]", rendered)
         self.assertNotIn("[reverse]/alice@example.com[/]", rendered)
 
+    def test_admin_search_status_line_starts_with_search_prompt(self):
+        rendered = _admin_search_status_line("alice@example.com", 2)
+
+        self.assertTrue(rendered.startswith("[reverse]/alice@example.com[/]"))
+        self.assertIn("匹配 2 条", rendered)
+
     def test_handle_admin_search_key_appends_characters(self):
         active, query, action = _handle_admin_search_key(True, "ali", "c", "c")
 
@@ -74,6 +82,40 @@ class AdminSearchTests(unittest.TestCase):
     def test_handle_admin_search_key_escape_clears_query(self):
         self.assertEqual(_handle_admin_search_key(True, "alice", "escape", None), (False, "", "cleared"))
         self.assertEqual(_handle_admin_search_key(False, "alice", "escape", None), (False, "", "cleared"))
+
+    def test_admin_search_binding_is_visible_in_footer(self):
+        source = Path(__file__).resolve().parents[1].joinpath("sub2api_usage.py").read_text()
+
+        self.assertIn('Binding("/", "start_search", "搜索")', source)
+        self.assertNotIn('Binding("/", "start_search", "搜索", show=False)', source)
+
+    def test_admin_search_mode_blocks_normal_tui_actions(self):
+        blocked = [
+            "start_search",
+            "quit",
+            "refresh",
+            "set_view",
+            "set_period",
+            "sort_by",
+            "toggle_sub_status",
+            "cycle_sort",
+        ]
+
+        for action in blocked:
+            with self.subTest(action=action):
+                self.assertFalse(_admin_search_allows_action(True, action))
+                self.assertTrue(_admin_search_allows_action(False, action))
+
+    def test_admin_search_mode_replaces_footer_with_status_line(self):
+        source = Path(__file__).resolve().parents[1].joinpath("sub2api_usage.py").read_text()
+
+        self.assertIn("def _sync_search_ui(self) -> None:", source)
+        self.assertIn("self.query_one(Footer).display = not self.searching", source)
+
+    def test_admin_search_mode_removes_table_focus_for_enter_key(self):
+        source = Path(__file__).resolve().parents[1].joinpath("sub2api_usage.py").read_text()
+
+        self.assertIn("self.set_focus(None)", source)
 
     def test_admin_tui_search_does_not_render_input_widget(self):
         source = Path(__file__).resolve().parents[1].joinpath("sub2api_usage.py").read_text()

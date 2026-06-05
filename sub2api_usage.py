@@ -1179,6 +1179,28 @@ def _admin_search_suffix(query: str, match_count: int, active: bool = False) -> 
     return " · [dim]/[/]搜索"
 
 
+def _admin_search_status_line(query: str, match_count: int) -> str:
+    from rich.markup import escape
+
+    return f"[reverse]/{escape(query)}[/]  匹配 {match_count} 条  [dim]Enter[/]完成  [dim]Esc[/]清除"
+
+
+_ADMIN_SEARCH_BLOCKED_ACTIONS = {
+    "start_search",
+    "quit",
+    "refresh",
+    "set_view",
+    "set_period",
+    "sort_by",
+    "toggle_sub_status",
+    "cycle_sort",
+}
+
+
+def _admin_search_allows_action(searching: bool, action: str) -> bool:
+    return not (searching and action in _ADMIN_SEARCH_BLOCKED_ACTIONS)
+
+
 def _handle_admin_search_key(
     active: bool,
     query: str,
@@ -1378,7 +1400,7 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
         """
         BINDINGS = [
             Binding("q", "quit", "退出"),
-            Binding("/", "start_search", "搜索", show=False),
+            Binding("/", "start_search", "搜索"),
             Binding("r", "refresh", "刷新"),
             Binding("d", "set_view('dashboard')", "Dashboard"),
             Binding("a", "set_view('accounts')", "账户"),
@@ -1411,6 +1433,11 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
             self._subscriptions_cache: dict[str, Any] = {}
             self.search_query = ""
             self.searching = False
+
+        def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+            if not _admin_search_allows_action(self.searching, action):
+                return False
+            return True
 
         def compose(self) -> ComposeResult:
             yield Header(show_clock=True)
@@ -1490,16 +1517,24 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
 
         def _stop_search(self, focus_table: bool = True) -> None:
             self.searching = False
+            self._sync_search_ui()
             if focus_table and self._search_enabled():
                 self.set_focus(self.query_one(f"#{self.view}_view", DataTable))
+
+        def _sync_search_ui(self) -> None:
+            self.query_one(Footer).display = not self.searching
+            self.screen.refresh_bindings()
 
         async def action_start_search(self) -> None:
             if not self._search_enabled():
                 return
             self.searching = True
+            self.set_focus(None)
+            self._sync_search_ui()
             self._update_status_hint()
 
         async def on_key(self, event) -> None:
+            was_searching = self.searching
             active, query, action = _handle_admin_search_key(
                 self.searching,
                 self.search_query,
@@ -1513,6 +1548,8 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
             if action in {"changed", "cleared"}:
                 self._rerender_search_view()
             self._update_status_hint()
+            if was_searching != self.searching:
+                self._sync_search_ui()
             if action in {"started", "changed", "committed", "cleared"}:
                 event.stop()
 
@@ -1594,6 +1631,11 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
                 self._update_status_hint()
 
         def _update_status_hint(self) -> None:
+            if self.searching and self._search_enabled():
+                self.query_one("#status", Static).update(
+                    _admin_search_status_line(self.search_query, self._match_count())
+                )
+                return
             start, end = period_range(self.period)
             if self.view == "subscriptions":
                 sort_label = SUB_SORT_LABELS.get(self.sub_sort_by, self.sub_sort_by)
