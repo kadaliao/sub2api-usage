@@ -1,8 +1,15 @@
 import unittest
+from pathlib import Path
 
 from rich.text import Text
 
-from sub2api_usage import _admin_search_suffix, _highlight_search_cells, _highlight_search_text, _row_matches_search
+from sub2api_usage import (
+    _admin_search_suffix,
+    _handle_admin_search_key,
+    _highlight_search_cells,
+    _highlight_search_text,
+    _row_matches_search,
+)
 
 
 class AdminSearchTests(unittest.TestCase):
@@ -41,11 +48,40 @@ class AdminSearchTests(unittest.TestCase):
         self.assertFalse(rendered[1].spans)
         self.assertFalse(rendered[2].spans)
 
-    def test_admin_search_suffix_shows_current_query(self):
-        rendered = _admin_search_suffix("alice@example.com", 2)
+    def test_admin_search_suffix_shows_vim_style_active_query(self):
+        rendered = _admin_search_suffix("alice@example.com", 2, active=True)
 
-        self.assertIn("搜索: [b yellow]alice@example.com[/]", rendered)
+        self.assertIn("[reverse]/alice@example.com[/]", rendered)
         self.assertIn("匹配 2 条", rendered)
+
+    def test_admin_search_suffix_shows_inactive_query_without_input_prompt(self):
+        rendered = _admin_search_suffix("alice@example.com", 2, active=False)
+
+        self.assertIn("搜索 [b yellow]alice@example.com[/]", rendered)
+        self.assertNotIn("[reverse]/alice@example.com[/]", rendered)
+
+    def test_handle_admin_search_key_appends_characters(self):
+        active, query, action = _handle_admin_search_key(True, "ali", "c", "c")
+
+        self.assertTrue(active)
+        self.assertEqual(query, "alic")
+        self.assertEqual(action, "changed")
+
+    def test_handle_admin_search_key_enters_and_commits_without_changing_query(self):
+        self.assertEqual(_handle_admin_search_key(False, "", "/", "/"), (True, "", "started"))
+        self.assertEqual(_handle_admin_search_key(True, "alice", "enter", None), (False, "alice", "committed"))
+
+    def test_handle_admin_search_key_escape_clears_query(self):
+        self.assertEqual(_handle_admin_search_key(True, "alice", "escape", None), (False, "", "cleared"))
+        self.assertEqual(_handle_admin_search_key(False, "alice", "escape", None), (False, "", "cleared"))
+
+    def test_admin_tui_search_does_not_render_input_widget(self):
+        source = Path(__file__).resolve().parents[1].joinpath("sub2api_usage.py").read_text()
+
+        self.assertNotIn('id="search"', source)
+        self.assertNotIn("on_input_changed", source)
+        self.assertNotIn("on_input_submitted", source)
+        self.assertNotIn("search-hidden", source)
 
 
 if __name__ == "__main__":

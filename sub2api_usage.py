@@ -1168,13 +1168,36 @@ def _highlight_search_cells(values: list[Any], query: str) -> list[Any]:
     return [_highlight_search_text(value, query) for value in values]
 
 
-def _admin_search_suffix(query: str, match_count: int) -> str:
+def _admin_search_suffix(query: str, match_count: int, active: bool = False) -> str:
     from rich.markup import escape
 
     needle = query.strip()
+    if active:
+        return f" · [reverse]/{escape(query)}[/] · 匹配 {match_count} 条 · [dim]Enter[/]完成 [dim]Esc[/]清除"
     if needle:
-        return f" · 搜索: [b yellow]{escape(query)}[/] · 匹配 {match_count} 条 · [dim]/[/]编辑 [dim]Esc[/]清除"
-    return " · 搜索: [dim](空)[/] · [dim]/[/]输入"
+        return f" · 搜索 [b yellow]{escape(query)}[/] · 匹配 {match_count} 条 · [dim]/[/]编辑 [dim]Esc[/]清除"
+    return " · [dim]/[/]搜索"
+
+
+def _handle_admin_search_key(
+    active: bool,
+    query: str,
+    key: str,
+    character: Optional[str],
+) -> tuple[bool, str, str]:
+    if key == "/" and not active:
+        return True, query, "started"
+    if key == "escape" and (active or query):
+        return False, "", "cleared"
+    if not active:
+        return active, query, "ignored"
+    if key == "enter":
+        return False, query, "committed"
+    if key == "backspace":
+        return True, query[:-1], "changed"
+    if character and len(character) == 1:
+        return True, f"{query}{character}", "changed"
+    return active, query, "ignored"
 
 
 # ----- Color helpers (used by Admin TUI) ---------------------------------------
@@ -1277,7 +1300,7 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
     from textual.app import App, ComposeResult
     from textual.binding import Binding
     from textual.containers import VerticalScroll
-    from textual.widgets import ContentSwitcher, DataTable, Footer, Header, Input, Static, Tab, Tabs
+    from textual.widgets import ContentSwitcher, DataTable, Footer, Header, Static, Tab, Tabs
 
     PERIOD_LABELS = {"today": "今天", "yesterday": "昨天", "week": "7 天", "month": "30 天", "all": "全部"}
 
@@ -1343,13 +1366,6 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
         }
         DataTable > .datatable--cursor {
             background: $accent 40%;
-        }
-        #search {
-            margin: 0 1;
-            height: 3;
-        }
-        #search.search-hidden {
-            display: none;
         }
         #status {
             dock: bottom;
@@ -1431,7 +1447,6 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
                     "ID [i]", "用户 [e]", "分组", "状态", "日 [1]", "周 [3]", "月 [4]", "到期 [x]",
                 )
                 yield sub_tbl
-            yield Input(placeholder="/ 搜索当前 Users/Subscriptions", id="search", compact=True, classes="search-hidden")
             yield Static(f"管理员 {self.cfg['email']}  ·  {self.cfg['base_url']}", id="status")
             yield Footer()
 
@@ -1471,12 +1486,10 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
         def _search_suffix(self) -> str:
             if not self._search_enabled():
                 return ""
-            return _admin_search_suffix(self.search_query, self._match_count())
+            return _admin_search_suffix(self.search_query, self._match_count(), active=self.searching)
 
         def _stop_search(self, focus_table: bool = True) -> None:
             self.searching = False
-            search = self.query_one("#search", Input)
-            search.add_class("search-hidden")
             if focus_table and self._search_enabled():
                 self.set_focus(self.query_one(f"#{self.view}_view", DataTable))
 
@@ -1484,29 +1497,23 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
             if not self._search_enabled():
                 return
             self.searching = True
-            search = self.query_one("#search", Input)
-            search.value = self.search_query
-            search.remove_class("search-hidden")
-            self.set_focus(search)
             self._update_status_hint()
-
-        async def on_input_changed(self, event: Input.Changed) -> None:
-            if event.input.id != "search":
-                return
-            self.search_query = event.value
-            if self.view == "users":
-                self._render_users(self._users_cache, self._users_totals)
-            elif self.view == "subscriptions":
-                self._render_subscriptions(self._subscriptions_cache)
-            self._update_status_hint()
-
-        async def on_input_submitted(self, event: Input.Submitted) -> None:
-            if event.input.id == "search":
-                self._stop_search()
-                self._update_status_hint()
 
         async def on_key(self, event) -> None:
-            if event.key == "escape" and self._clear_search():
+            active, query, action = _handle_admin_search_key(
+                self.searching,
+                self.search_query,
+                event.key,
+                getattr(event, "character", None),
+            )
+            if action == "ignored":
+                return
+            self.searching = active
+            self.search_query = query
+            if action in {"changed", "cleared"}:
+                self._rerender_search_view()
+            self._update_status_hint()
+            if action in {"started", "changed", "committed", "cleared"}:
                 event.stop()
 
         async def action_set_view(self, v: str) -> None:
@@ -1516,15 +1523,16 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
             if not self._search_enabled() or (not self.searching and not self.search_query):
                 return False
             self.search_query = ""
-            search = self.query_one("#search", Input)
-            search.value = ""
             self._stop_search()
+            self._rerender_search_view()
+            self._update_status_hint()
+            return True
+
+        def _rerender_search_view(self) -> None:
             if self.view == "users":
                 self._render_users(self._users_cache, self._users_totals)
             elif self.view == "subscriptions":
                 self._render_subscriptions(self._subscriptions_cache)
-            self._update_status_hint()
-            return True
 
         async def action_set_period(self, p: str) -> None:
             if self.view == "users":
