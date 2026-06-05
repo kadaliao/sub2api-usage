@@ -1164,6 +1164,19 @@ def _highlight_search_text(value: Any, query: str):
     return text
 
 
+def _highlight_search_cells(values: list[Any], query: str) -> list[Any]:
+    return [_highlight_search_text(value, query) for value in values]
+
+
+def _admin_search_suffix(query: str, match_count: int) -> str:
+    from rich.markup import escape
+
+    needle = query.strip()
+    if needle:
+        return f" · 搜索: [b yellow]{escape(query)}[/] · 匹配 {match_count} 条 · [dim]/[/]编辑 [dim]Esc[/]清除"
+    return " · 搜索: [dim](空)[/] · [dim]/[/]输入"
+
+
 # ----- Color helpers (used by Admin TUI) ---------------------------------------
 
 _STATUS_COLORS = {
@@ -1260,7 +1273,6 @@ def _print_admin_subscriptions(
 # ===== Admin TUI ==============================================================
 
 def run_admin_tui(cfg: dict[str, str]) -> None:
-    from rich.markup import escape
     from rich.text import Text
     from textual.app import App, ComposeResult
     from textual.binding import Binding
@@ -1459,10 +1471,7 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
         def _search_suffix(self) -> str:
             if not self._search_enabled():
                 return ""
-            if self.search_query.strip():
-                query = escape(self.search_query)
-                return f" · 搜索 [b yellow]/{query}[/] ({self._match_count()} 条) · [dim]/[/]编辑 [dim]Esc[/]清除"
-            return " · [dim]/[/]搜索"
+            return _admin_search_suffix(self.search_query, self._match_count())
 
         def _stop_search(self, focus_table: bool = True) -> None:
             self.searching = False
@@ -1759,17 +1768,21 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
                 lbl("all", "全部 [5]"),
             )
             for i, u in enumerate(_sort_users(items, cur), 1):
-                if not _row_matches_search(self._user_search_values(u), self.search_query):
-                    continue
                 rank_style = "bold yellow" if i <= 3 else "dim"
+                cells = _highlight_search_cells(
+                    [
+                        styled(str(i), rank_style),
+                        styled((u.get("email") or "")[:32], "cyan"),
+                        cost_cell(u.get("today_cost")),
+                        cost_cell(u.get("yesterday_cost")),
+                        cost_cell(u.get("week_cost")),
+                        cost_cell(u.get("month_cost")),
+                        cost_cell(u.get("all_cost")),
+                    ],
+                    self.search_query,
+                )
                 tbl.add_row(
-                    _highlight_search_text(styled(str(i), rank_style), self.search_query),
-                    _highlight_search_text(styled((u.get("email") or "")[:32], "cyan"), self.search_query),
-                    _highlight_search_text(cost_cell(u.get("today_cost")), self.search_query),
-                    _highlight_search_text(cost_cell(u.get("yesterday_cost")), self.search_query),
-                    _highlight_search_text(cost_cell(u.get("week_cost")), self.search_query),
-                    _highlight_search_text(cost_cell(u.get("month_cost")), self.search_query),
-                    _highlight_search_text(cost_cell(u.get("all_cost")), self.search_query),
+                    *cells,
                 )
 
         def _render_subscriptions(self, data: dict[str, Any]) -> None:
@@ -1795,26 +1808,21 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
                 lbl("expires_at", "到期 [x]"),
             )
             for sub in data.get("items") or []:
-                if not _row_matches_search(self._subscription_search_values(sub), self.search_query):
-                    continue
-                tbl.add_row(
-                    _highlight_search_text(styled(str(sub.get("id", "")), "dim"), self.search_query),
-                    _highlight_search_text(styled(_subscription_user_label(sub), "cyan"), self.search_query),
-                    _highlight_search_text(styled(_subscription_group_label(sub), "magenta"), self.search_query),
-                    _highlight_search_text(status_cell(sub.get("status"), 10), self.search_query),
-                    _highlight_search_text(
+                cells = _highlight_search_cells(
+                    [
+                        styled(str(sub.get("id", "")), "dim"),
+                        styled(_subscription_user_label(sub), "cyan"),
+                        styled(_subscription_group_label(sub), "magenta"),
+                        status_cell(sub.get("status"), 10),
                         window_cell(_subscription_window_cell(sub, "daily_usage_usd", "daily_limit_usd"), 26),
-                        self.search_query,
-                    ),
-                    _highlight_search_text(
                         window_cell(_subscription_window_cell(sub, "weekly_usage_usd", "weekly_limit_usd"), 26),
-                        self.search_query,
-                    ),
-                    _highlight_search_text(
                         window_cell(_subscription_window_cell(sub, "monthly_usage_usd", "monthly_limit_usd"), 26),
-                        self.search_query,
-                    ),
-                    _highlight_search_text(expires_cell(sub.get("expires_at")), self.search_query),
+                        expires_cell(sub.get("expires_at")),
+                    ],
+                    self.search_query,
+                )
+                tbl.add_row(
+                    *cells,
                 )
 
         @staticmethod
