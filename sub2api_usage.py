@@ -2,7 +2,7 @@
 """sub2api 用量查询工具
 
 首次运行会引导填写账号信息并保存到 ~/.config/sub2api-usage/config.json (chmod 600)。
-默认进入全屏交互式面板，可在今天 / 7 天 / 30 天 / 全部之间切换并翻页查看明细。
+默认进入全屏交互式面板，一屏展示今天 / 昨天 / 7 天 / 30 天的统计数据。
 
 用法:
     sub2api-usage                # 进入交互面板
@@ -138,20 +138,6 @@ class Client:
         return await self._get(
             "/api/v1/usage/stats",
             {"start_date": start, "end_date": end, "timezone": self.timezone},
-        )
-
-    async def list(self, start: str, end: str, page: int, page_size: int) -> dict[str, Any]:
-        return await self._get(
-            "/api/v1/usage",
-            {
-                "start_date": start,
-                "end_date": end,
-                "timezone": self.timezone,
-                "page": page,
-                "page_size": page_size,
-                "sort_by": "created_at",
-                "sort_order": "desc",
-            },
         )
 
     async def _post(self, path: str, body: dict[str, Any]) -> Any:
@@ -350,6 +336,8 @@ PERIODS = (
     ("all", "全部"),
 )
 DEFAULT_PERIOD = "today"
+ORDINARY_SUMMARY_PERIODS = ("today", "yesterday", "week", "month")
+PERIOD_LABELS = dict(PERIODS)
 
 
 def period_range(period: str) -> tuple[str, str]:
@@ -453,25 +441,49 @@ async def run_setup(
 
 # ===== Non-interactive print mode ============================================
 
-async def cmd_print(cfg: dict[str, str], period: str, show_list: bool, page: int, page_size: int, as_json: bool) -> None:
-    start, end = period_range(period)
+async def _fetch_usage_summaries(
+    client: Any,
+    periods: tuple[str, ...] = ORDINARY_SUMMARY_PERIODS,
+) -> list[dict[str, Any]]:
+    ranges = [(period, *period_range(period)) for period in periods]
+    stats_list = await asyncio.gather(*(client.stats(start, end) for _period, start, end in ranges))
+    return [
+        {
+            "period": period,
+            "label": PERIOD_LABELS.get(period, period),
+            "start": start,
+            "end": end,
+            "stats": stats,
+        }
+        for (period, start, end), stats in zip(ranges, stats_list)
+    ]
+
+
+async def cmd_print(cfg: dict[str, str], period: Optional[str], as_json: bool) -> None:
     client = Client(cfg["base_url"], cfg["email"], cfg["password"], cfg["timezone"])
     try:
-        stats = await client.stats(start, end)
-        list_data = await client.list(start, end, page, page_size) if show_list else None
+        if period:
+            start, end = period_range(period)
+            stats = await client.stats(start, end)
+            summaries = None
+        else:
+            summaries = await _fetch_usage_summaries(client)
+            stats = None
     finally:
         await client.aclose()
 
     if as_json:
-        out: dict[str, Any] = {"range": {"start": start, "end": end, "timezone": cfg["timezone"]}, "stats": stats}
-        if list_data is not None:
-            out["list"] = list_data
+        if summaries is not None:
+            out: dict[str, Any] = {"timezone": cfg["timezone"], "summaries": summaries}
+        else:
+            out = {"range": {"start": start, "end": end, "timezone": cfg["timezone"]}, "stats": stats}
         print(json.dumps(out, ensure_ascii=False, indent=2))
         return
 
-    _print_stats(stats, start, end, cfg["timezone"])
-    if list_data is not None:
-        _print_list(list_data)
+    if summaries is not None:
+        _print_usage_summaries(summaries, cfg["timezone"])
+    else:
+        _print_stats(stats or {}, start, end, cfg["timezone"])
 
 
 def _print_stats(stats: dict[str, Any], start: str, end: str, tz: str) -> None:
@@ -491,23 +503,41 @@ def _print_stats(stats: dict[str, Any], start: str, end: str, tz: str) -> None:
             print(f"  {label:<12} {fmt(stats[key])}")
 
 
-def _print_list(data: dict[str, Any]) -> None:
-    items = data.get("items") or []
-    print(f"\n== 明细 (第 {data.get('page')}/{data.get('pages')} 页, 共 {data.get('total')} 条) ==")
-    header = f"{'time':<19}  {'model':<18} {'key':<14} {'group':<12} {'in':>7} {'out':>7} {'cache_r':>9} {'cost':>10} {'dur':>8}"
+def _usage_summary_fields(stats: dict[str, Any]) -> dict[str, str]:
+    return {
+        "requests": humanize_count(stats.get("total_requests") or 0),
+        "tokens": humanize_count(stats.get("total_tokens") or 0),
+        "input": humanize_count(stats.get("total_input_tokens") or 0),
+        "output": humanize_count(stats.get("total_output_tokens") or 0),
+        "cache": humanize_count(stats.get("total_cache_tokens") or 0),
+        "cost": humanize_money(stats.get("total_cost") or 0),
+        "actual": humanize_money(stats.get("total_actual_cost") or 0),
+        "duration": humanize_duration_ms(stats.get("average_duration_ms") or 0),
+    }
+
+
+def _print_usage_summaries(summaries: list[dict[str, Any]], tz: str) -> None:
+    print(f"\n== 用量统计 ({tz}) ==")
+    header = (
+        f"{'时段':<8} {'范围':<23} {'请求':>10} {'Token':>10} "
+        f"{'输入':>10} {'输出':>10} {'Cache':>10} {'成本':>12} {'实际':>12} {'均耗时':>8}"
+    )
     print(f"  {header}")
     print(f"  {'-' * len(header)}")
-    for row in items:
+    for item in summaries:
+        fields = _usage_summary_fields(item.get("stats") or {})
+        range_text = f"{item.get('start')}~{item.get('end')}"
         print(
-            f"  {(row.get('created_at') or '')[:19].replace('T', ' '):<19}  "
-            f"{(row.get('model') or '')[:18]:<18} "
-            f"{((row.get('api_key') or {}).get('name') or '')[:14]:<14} "
-            f"{((row.get('group') or {}).get('name') or '')[:12]:<12} "
-            f"{humanize_count(row.get('input_tokens') or 0):>7} "
-            f"{humanize_count(row.get('output_tokens') or 0):>7} "
-            f"{humanize_count(row.get('cache_read_tokens') or 0):>9} "
-            f"{humanize_money(row.get('total_cost') or 0):>10} "
-            f"{humanize_duration_ms(row.get('duration_ms') or 0):>8}"
+            f"  {item.get('label', ''):<8} "
+            f"{range_text:<23} "
+            f"{fields['requests']:>10} "
+            f"{fields['tokens']:>10} "
+            f"{fields['input']:>10} "
+            f"{fields['output']:>10} "
+            f"{fields['cache']:>10} "
+            f"{fields['cost']:>12} "
+            f"{fields['actual']:>12} "
+            f"{fields['duration']:>8}"
         )
 
 
@@ -516,20 +546,18 @@ def _print_list(data: dict[str, Any]) -> None:
 def run_tui(cfg: dict[str, str]) -> None:
     from textual.app import App, ComposeResult
     from textual.binding import Binding
-    from textual.widgets import DataTable, Footer, Header, Static, Tab, Tabs
+    from textual.widgets import Footer, Header, Static
 
     class UsageApp(App):
         CSS = """
         Screen { background: $surface; }
-        #stats {
+        #summary {
             padding: 1 2;
             margin: 0 1;
             border: round $primary;
             color: $text;
-            height: auto;
+            height: 1fr;
         }
-        Tabs { margin: 0 1; }
-        DataTable { margin: 0 1; height: 1fr; }
         #status {
             dock: bottom;
             height: 1;
@@ -541,17 +569,7 @@ def run_tui(cfg: dict[str, str]) -> None:
         BINDINGS = [
             Binding("q", "quit", "退出"),
             Binding("r", "refresh", "刷新"),
-            Binding("n", "next_page", "下一页"),
-            Binding("p", "prev_page", "上一页"),
-            Binding("1", "set_period('today')", "今天"),
-            Binding("2", "set_period('week')", "7 天"),
-            Binding("3", "set_period('month')", "30 天"),
-            Binding("4", "set_period('all')", "全部"),
         ]
-
-        period = DEFAULT_PERIOD
-        page = 1
-        page_size = 50
 
         def __init__(self, cfg: dict[str, str]):
             super().__init__()
@@ -560,17 +578,7 @@ def run_tui(cfg: dict[str, str]) -> None:
 
         def compose(self) -> ComposeResult:
             yield Header(show_clock=True)
-            yield Tabs(
-                Tab("今天 (1)", id="today"),
-                Tab("7 天 (2)", id="week"),
-                Tab("30 天 (3)", id="month"),
-                Tab("全部 (4)", id="all"),
-                active=DEFAULT_PERIOD,
-            )
-            yield Static("加载中...", id="stats")
-            table: DataTable = DataTable(id="table", zebra_stripes=True, cursor_type="row")
-            table.add_columns("时间", "模型", "Key", "Group", "输入", "输出", "Cache", "成本", "耗时")
-            yield table
+            yield Static("加载中...", id="summary")
             yield Static(f"账号 {self.cfg['email']}  ·  {self.cfg['base_url']}", id="status")
             yield Footer()
 
@@ -579,80 +587,41 @@ def run_tui(cfg: dict[str, str]) -> None:
             self.sub_title = self.cfg["email"]
             await self._refresh_data()
 
-        async def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:  # noqa: F821
-            new = event.tab.id if event.tab else None
-            if new and new != self.period:
-                self.period = new
-                self.page = 1
-                await self._refresh_data()
-
-        async def action_set_period(self, p: str) -> None:
-            self.query_one(Tabs).active = p
-
         async def action_refresh(self) -> None:
             await self._refresh_data()
 
-        async def action_next_page(self) -> None:
-            self.page += 1
-            await self._refresh_data()
-
-        async def action_prev_page(self) -> None:
-            if self.page > 1:
-                self.page -= 1
-                await self._refresh_data()
-
         async def _refresh_data(self) -> None:
-            start, end = period_range(self.period)
-            stats_widget = self.query_one("#stats", Static)
-            table = self.query_one(DataTable)
-            stats_widget.update("加载中...")
-            table.loading = True
+            summary_widget = self.query_one("#summary", Static)
+            summary_widget.update("加载中...")
+            summary_widget.loading = True
             try:
                 try:
-                    stats = await self.client.stats(start, end)
-                    list_data = await self.client.list(start, end, self.page, self.page_size)
+                    summaries = await _fetch_usage_summaries(self.client)
                 except APIError as e:
-                    stats_widget.update(f"[red]错误: {e}[/]")
+                    summary_widget.update(f"[red]错误: {e}[/]")
                     return
             finally:
-                table.loading = False
-            stats_widget.update(self._render_stats(stats, start, end))
-            table.clear()
-            for row in list_data.get("items", []):
-                table.add_row(
-                    (row.get("created_at") or "")[:19].replace("T", " "),
-                    (row.get("model") or "")[:24],
-                    ((row.get("api_key") or {}).get("name") or "")[:16],
-                    ((row.get("group") or {}).get("name") or "")[:14],
-                    humanize_count(row.get("input_tokens") or 0),
-                    humanize_count(row.get("output_tokens") or 0),
-                    humanize_count(row.get("cache_read_tokens") or 0),
-                    humanize_money(row.get("total_cost") or 0),
-                    humanize_duration_ms(row.get("duration_ms") or 0),
-                )
-            total = list_data.get("total", 0)
-            pages = list_data.get("pages", 1)
-            page = list_data.get("page", self.page)
+                summary_widget.loading = False
+            summary_widget.update(self._render_summaries(summaries))
             self.query_one("#status", Static).update(
-                f"账号 {self.cfg['email']}  ·  范围 {start} ~ {end}  ·  第 {page}/{pages} 页 · 共 {total} 条 "
-                f"(n 下一页 · p 上一页 · r 刷新 · q 退出)"
+                f"账号 {self.cfg['email']}  ·  {self.cfg['base_url']}  ·  r 刷新 · q 退出"
             )
 
         @staticmethod
-        def _render_stats(stats: dict[str, Any], start: str, end: str) -> str:
-            req = humanize_count(stats.get("total_requests") or 0)
-            tok = humanize_count(stats.get("total_tokens") or 0)
-            tin = humanize_count(stats.get("total_input_tokens") or 0)
-            tout = humanize_count(stats.get("total_output_tokens") or 0)
-            tcache = humanize_count(stats.get("total_cache_tokens") or 0)
-            cost = humanize_money(stats.get("total_cost") or 0)
-            actual = humanize_money(stats.get("total_actual_cost") or 0)
-            dur = humanize_duration_ms(stats.get("average_duration_ms") or 0)
-            return (
-                f"[b]{start} ~ {end}[/]\n"
-                f"请求 [cyan]{req}[/]    Token [cyan]{tok}[/]   ([dim]in[/] {tin} · [dim]out[/] {tout} · [dim]cache[/] {tcache})\n"
-                f"成本 [yellow]{cost}[/]   实际 [yellow]{actual}[/]   平均耗时 [magenta]{dur}[/]"
-            )
+        def _render_summaries(summaries: list[dict[str, Any]]) -> str:
+            lines = ["[b]普通用量统计[/]", ""]
+            for item in summaries:
+                stats = item.get("stats") or {}
+                fields = _usage_summary_fields(stats)
+                lines.extend([
+                    f"[b cyan]{item.get('label')}[/]  [dim]{item.get('start')} ~ {item.get('end')}[/]",
+                    f"  请求 [cyan]{fields['requests']}[/]    Token [cyan]{fields['tokens']}[/] "
+                    f"([dim]in[/] {fields['input']} · [dim]out[/] {fields['output']} · [dim]cache[/] {fields['cache']})",
+                    f"  成本 [yellow]{fields['cost']}[/]    实际 [yellow]{fields['actual']}[/]    "
+                    f"平均耗时 [magenta]{fields['duration']}[/]",
+                    "",
+                ])
+            return "\n".join(lines).rstrip()
 
         async def on_unmount(self) -> None:
             await self.client.aclose()
@@ -1973,10 +1942,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("name", nargs="?", help="profile 名称，省略则更新当前 default")
 
     pp = sub.add_parser("print", help="非交互打印 (脚本/管道用)")
-    pp.add_argument("--period", default=DEFAULT_PERIOD, choices=[k for k, _ in PERIODS])
-    pp.add_argument("--list", action="store_true", help="同时拉取明细")
-    pp.add_argument("--page", type=int, default=1)
-    pp.add_argument("--page-size", type=int, default=20)
+    pp.add_argument("--period", default=None, choices=[k for k, _ in PERIODS],
+                    help="只打印指定时段；不传则一屏打印今天 / 昨天 / 7 天 / 30 天")
     pp.add_argument("--json", action="store_true")
 
     pf = sub.add_parser("profiles", help="管理 profile (多账号/多后台)")
@@ -2074,7 +2041,7 @@ def _main() -> int:
 
     if args.cmd == "print":
         try:
-            asyncio.run(cmd_print(profile, args.period, args.list, args.page, args.page_size, args.json))
+            asyncio.run(cmd_print(profile, args.period, args.json))
         except APIError as e:
             print(f"[错误] {e}", file=sys.stderr)
             return 1

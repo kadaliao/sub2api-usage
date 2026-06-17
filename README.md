@@ -5,7 +5,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/sub2api-usage.svg)](https://pypi.org/project/sub2api-usage/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-[sub2api](https://github.com/Wei-Shaw/sub2api) 后台用量查询的命令行工具。终端里直接看请求数、Token、成本、明细，默认展示今天，支持今天 / 7 天 / 30 天 / 全部切换。
+[sub2api](https://github.com/Wei-Shaw/sub2api) 后台用量查询的命令行工具。普通模式聚焦统计数据，一屏展示今天、昨天、7 天、30 天的请求数、Token、成本和平均耗时；管理员模式提供账户、用户、订阅等运维视图。
 
 ## 安装
 
@@ -15,9 +15,6 @@ uv tool install sub2api-usage
 
 # 或者用 pipx
 pipx install sub2api-usage
-
-# 或者直接 pip
-pip install sub2api-usage
 ```
 
 ## 用法
@@ -25,16 +22,18 @@ pip install sub2api-usage
 ```bash
 # 首次运行会引导填写账号、密码、后台地址、时区，
 # 配置保存到 ~/.config/sub2api-usage/config.json (chmod 600)
-# 默认打开今天视图
+# 默认打开统计面板：今天 / 昨天 / 7 天 / 30 天
 sub2api-usage
 
 # 重新配置账号
 sub2api-usage setup
 
 # 非交互打印 (脚本 / 管道用)
-# 默认打印今天；用 --period week 可看最近 7 天
+# 默认一屏打印今天 / 昨天 / 7 天 / 30 天
 sub2api-usage print
-sub2api-usage print --period week --list --page-size 20
+
+# 脚本场景也可以只打印单个时段
+sub2api-usage print --period week
 sub2api-usage print --period month --json
 ```
 
@@ -42,13 +41,10 @@ sub2api-usage print --period month --json
 
 | 键 | 功能 |
 | --- | --- |
-| `1` / `2` / `3` / `4` | 今天 / 7 天 / 30 天 / 全部 |
-| `←` / `→` | 在标签间切换 |
-| `n` / `p` | 下一页 / 上一页 |
 | `r` | 刷新 |
 | `q` | 退出 |
 
-数据拉取时表格会显示加载指示器，避免误以为卡死。
+普通面板不展示请求明细，只展示统计性质的数据：今天、昨天、最近 7 天、最近 30 天。
 
 ### 单位
 
