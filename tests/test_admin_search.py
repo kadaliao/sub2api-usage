@@ -173,6 +173,12 @@ class AdminSearchTests(unittest.TestCase):
         self.assertIn("self._select_first_search_match(committed_query)", source)
         self.assertIn("move_cursor(row=", source)
 
+    def test_admin_search_focuses_selected_row_without_scrolling_tabs_out(self):
+        source = Path(__file__).resolve().parents[1].joinpath("sub2api_usage.py").read_text()
+
+        self.assertIn("self.set_focus(tbl, scroll_visible=False)", source)
+        self.assertNotIn("self.set_focus(tbl)", source)
+
     def test_admin_tui_search_does_not_render_input_widget(self):
         source = Path(__file__).resolve().parents[1].joinpath("sub2api_usage.py").read_text()
 

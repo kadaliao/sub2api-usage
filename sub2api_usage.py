@@ -1678,7 +1678,7 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
                 return
             tbl = self.query_one(f"#{self.view}_view", DataTable)
             tbl.move_cursor(row=selected_row, column=0, animate=False, scroll=True)
-            self.set_focus(tbl)
+            self.set_focus(tbl, scroll_visible=False)
 
         async def action_set_period(self, p: str) -> None:
             if self.view == "users":
