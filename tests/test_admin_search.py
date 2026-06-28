@@ -9,6 +9,7 @@ from sub2api_usage import (
     _admin_search_status_line,
     _admin_search_suffix,
     _apply_admin_search_key,
+    _first_matching_row_index,
     _handle_admin_search_key,
     _highlight_search_cells,
     _highlight_search_text,
@@ -52,19 +53,22 @@ class AdminSearchTests(unittest.TestCase):
         self.assertFalse(rendered[1].spans)
         self.assertFalse(rendered[2].spans)
 
-    def test_highlight_search_cells_can_mark_entire_matching_row(self):
-        rendered = _highlight_search_cells(
-            [Text("Alice@Example.com"), Text("Engineering"), Text("active")],
-            "alice",
-            full_row=True,
-        )
+    def test_first_matching_row_index_selects_first_matching_visible_row(self):
+        rows = [
+            {"email": "alice@example.com", "cost": "$1.00"},
+            {"email": "bob@example.com", "cost": "$2.00"},
+            {"email": "carol@example.com", "cost": "$3.00"},
+        ]
 
-        self.assertEqual([cell.plain for cell in rendered], ["Alice@Example.com", "Engineering", "active"])
-        for cell in rendered:
-            self.assertTrue(
-                any("black on yellow" in str(span.style) for span in cell.spans),
-                f"{cell.plain!r} was not row-highlighted",
-            )
+        selected = _first_matching_row_index(rows, "bob", lambda row: [row["email"], row["cost"]])
+
+        self.assertEqual(selected, 1)
+
+    def test_first_matching_row_index_returns_none_without_query_or_match(self):
+        rows = [{"email": "alice@example.com"}]
+
+        self.assertIsNone(_first_matching_row_index(rows, "", lambda row: [row["email"]]))
+        self.assertIsNone(_first_matching_row_index(rows, "bob", lambda row: [row["email"]]))
 
     def test_admin_search_suffix_shows_vim_style_active_query(self):
         rendered = _admin_search_suffix("alice@example.com", 2, active=True)
@@ -154,10 +158,12 @@ class AdminSearchTests(unittest.TestCase):
 
         self.assertIn("self.set_focus(None)", source)
 
-    def test_admin_search_commit_rerenders_view_to_clear_highlights(self):
+    def test_admin_search_commit_rerenders_view_and_selects_match(self):
         source = Path(__file__).resolve().parents[1].joinpath("sub2api_usage.py").read_text()
 
         self.assertIn('if action in {"changed", "committed", "cleared"}:', source)
+        self.assertIn('if action == "committed":', source)
+        self.assertIn("move_cursor(row=", source)
 
     def test_admin_tui_search_does_not_render_input_widget(self):
         source = Path(__file__).resolve().parents[1].joinpath("sub2api_usage.py").read_text()

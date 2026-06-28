@@ -1196,23 +1196,32 @@ def _row_matches_search(values: list[Any], query: str) -> bool:
     return any(needle in _search_plain(value).casefold() for value in values)
 
 
-def _highlight_search_text(value: Any, query: str, full_text: bool = False):
+def _highlight_search_text(value: Any, query: str):
     if not query.strip():
         return value
     from rich.text import Text
 
     text = value.copy() if isinstance(value, Text) else Text(_search_plain(value))
-    if full_text:
-        text.stylize("black on yellow", 0, len(text.plain))
-        return text
     pattern = re.escape(query.strip())
     text.highlight_regex(f"(?i){pattern}", "black on yellow")
     return text
 
 
-def _highlight_search_cells(values: list[Any], query: str, full_row: bool = False) -> list[Any]:
-    should_highlight_row = full_row and _row_matches_search(values, query)
-    return [_highlight_search_text(value, query, full_text=should_highlight_row) for value in values]
+def _highlight_search_cells(values: list[Any], query: str) -> list[Any]:
+    return [_highlight_search_text(value, query) for value in values]
+
+
+def _first_matching_row_index(
+    rows: list[Any],
+    query: str,
+    values_for_row,
+) -> Optional[int]:
+    if not query.strip():
+        return None
+    for index, row in enumerate(rows):
+        if _row_matches_search(values_for_row(row), query):
+            return index
+    return None
 
 
 def _admin_search_suffix(query: str, match_count: int, active: bool = False) -> str:
@@ -1623,6 +1632,8 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
             self.search_query = applied_query
             if action in {"changed", "committed", "cleared"}:
                 self._rerender_search_view()
+            if action == "committed":
+                self._select_first_search_match()
             self._update_status_hint()
             if was_searching != self.searching:
                 self._sync_search_ui()
@@ -1647,6 +1658,26 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
                 self._render_users(self._users_cache, self._users_totals)
             elif self.view == "subscriptions":
                 self._render_subscriptions(self._subscriptions_cache)
+
+        def _select_first_search_match(self) -> None:
+            selected_row: Optional[int] = None
+            if self.view == "users":
+                selected_row = _first_matching_row_index(
+                    _sort_users(self._users_cache, self.user_sort_by),
+                    self.search_query,
+                    self._user_search_values,
+                )
+            elif self.view == "subscriptions":
+                selected_row = _first_matching_row_index(
+                    self._subscriptions_cache.get("items") or [],
+                    self.search_query,
+                    self._subscription_search_values,
+                )
+            if selected_row is None:
+                return
+            tbl = self.query_one(f"#{self.view}_view", DataTable)
+            tbl.move_cursor(row=selected_row, column=0, animate=False, scroll=True)
+            self.set_focus(tbl)
 
         async def action_set_period(self, p: str) -> None:
             if self.view == "users":
@@ -1907,7 +1938,6 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
                         cost_cell(u.get("all_cost")),
                     ],
                     self._effective_search_query(),
-                    full_row=not self.searching,
                 )
                 tbl.add_row(
                     *cells,
@@ -1948,7 +1978,6 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
                         expires_cell(sub.get("expires_at")),
                     ],
                     self._effective_search_query(),
-                    full_row=not self.searching,
                 )
                 tbl.add_row(
                     *cells,
