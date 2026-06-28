@@ -2043,9 +2043,13 @@ def cmd_profiles_remove(cfg: dict[str, Any], name: str, namespace: str = "profil
 
 # ===== CLI ====================================================================
 
+def _add_profile_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("-p", "-P", "--profile", dest="profile", help="使用指定的 profile (默认: 配置里的 default)")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="sub2api 用量查询")
-    p.add_argument("-P", "--profile", help="使用指定的 profile (默认: 配置里的 default)")
+    _add_profile_argument(p)
     sub = p.add_subparsers(dest="cmd")
 
     sp = sub.add_parser("setup", help="(重新) 配置账号信息")
@@ -2068,6 +2072,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- admin 子命令组 ---
     ap = sub.add_parser("admin", help="管理员模式：查看账户余额、用户用量等")
+    _add_profile_argument(ap)
     ap.add_argument(
         "--no-color", action="store_true",
         help="不强制开启颜色 (默认会清除 NO_COLOR 并设置 FORCE_COLOR=1，方便 TUI 显示)",

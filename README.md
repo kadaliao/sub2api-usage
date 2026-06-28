@@ -24,6 +24,8 @@ pipx install sub2api-usage
 # 配置保存到 ~/.config/sub2api-usage/config.json (chmod 600)
 # 默认打开统计面板：今天 / 昨天 / 7 天 / 30 天
 sub2api-usage
+sub2api-usage -p work
+sub2api-usage --profile work
 
 # 配置账号：没有 profile 时直接进入新增；已有 profile 时先选择要修改的 profile 或新增
 sub2api-usage setup
@@ -63,6 +65,8 @@ sub2api-usage print --period month --json
 ```bash
 # 首次运行会引导填写管理员邮箱/密码，登录后会校验 role=admin
 sub2api-usage admin
+sub2api-usage admin -p root
+sub2api-usage admin --profile root
 
 # 配置管理员账号：没有 admin profile 时直接进入新增；已有时先选择要修改的 profile 或新增
 sub2api-usage admin setup
