@@ -1293,7 +1293,7 @@ def _apply_admin_search_key(
         return False, "", "", "cleared"
     next_active, next_input, action = _handle_admin_search_key(active, input_query, key, character)
     if action == "committed":
-        return next_active, "", input_query, action
+        return next_active, "", "", action
     if action == "cleared":
         return next_active, "", "", action
     return next_active, next_input, applied_query, action
@@ -1611,13 +1611,14 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
             if not self._search_enabled():
                 return
             self.searching = True
-            self.search_input = self.search_query
+            self.search_input = ""
             self.set_focus(None)
             self._sync_search_ui()
             self._update_status_hint()
 
         async def on_key(self, event) -> None:
             was_searching = self.searching
+            committed_query = self.search_input if self.searching and event.key == "enter" else ""
             active, input_query, applied_query, action = _apply_admin_search_key(
                 self.searching,
                 self.search_input,
@@ -1633,7 +1634,7 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
             if action in {"changed", "committed", "cleared"}:
                 self._rerender_search_view()
             if action == "committed":
-                self._select_first_search_match()
+                self._select_first_search_match(committed_query)
             self._update_status_hint()
             if was_searching != self.searching:
                 self._sync_search_ui()
@@ -1659,18 +1660,18 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
             elif self.view == "subscriptions":
                 self._render_subscriptions(self._subscriptions_cache)
 
-        def _select_first_search_match(self) -> None:
+        def _select_first_search_match(self, query: str) -> None:
             selected_row: Optional[int] = None
             if self.view == "users":
                 selected_row = _first_matching_row_index(
                     _sort_users(self._users_cache, self.user_sort_by),
-                    self.search_query,
+                    query,
                     self._user_search_values,
                 )
             elif self.view == "subscriptions":
                 selected_row = _first_matching_row_index(
                     self._subscriptions_cache.get("items") or [],
-                    self.search_query,
+                    query,
                     self._subscription_search_values,
                 )
             if selected_row is None:

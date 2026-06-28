@@ -99,7 +99,7 @@ class AdminSearchTests(unittest.TestCase):
         self.assertEqual(_handle_admin_search_key(False, "", "/", "/"), (True, "", "started"))
         self.assertEqual(_handle_admin_search_key(True, "alice", "enter", None), (False, "", "committed"))
 
-    def test_apply_admin_search_key_commits_filter_but_clears_input(self):
+    def test_apply_admin_search_key_commits_without_retaining_query(self):
         active, input_query, applied_query, action = _apply_admin_search_key(
             True,
             "alice",
@@ -110,9 +110,9 @@ class AdminSearchTests(unittest.TestCase):
 
         self.assertFalse(active)
         self.assertEqual(input_query, "")
-        self.assertEqual(applied_query, "alice")
+        self.assertEqual(applied_query, "")
         self.assertEqual(action, "committed")
-        self.assertEqual(_admin_search_effective_query(active, input_query, applied_query), "alice")
+        self.assertEqual(_admin_search_effective_query(active, input_query, applied_query), "")
 
     def test_apply_admin_search_escape_clears_committed_filter(self):
         self.assertEqual(
@@ -158,11 +158,19 @@ class AdminSearchTests(unittest.TestCase):
 
         self.assertIn("self.set_focus(None)", source)
 
+    def test_admin_search_starts_with_empty_input_after_previous_commit(self):
+        source = Path(__file__).resolve().parents[1].joinpath("sub2api_usage.py").read_text()
+
+        self.assertIn('self.search_input = ""', source)
+        self.assertNotIn("self.search_input = self.search_query", source)
+
     def test_admin_search_commit_rerenders_view_and_selects_match(self):
         source = Path(__file__).resolve().parents[1].joinpath("sub2api_usage.py").read_text()
 
+        self.assertIn("committed_query = self.search_input", source)
         self.assertIn('if action in {"changed", "committed", "cleared"}:', source)
         self.assertIn('if action == "committed":', source)
+        self.assertIn("self._select_first_search_match(committed_query)", source)
         self.assertIn("move_cursor(row=", source)
 
     def test_admin_tui_search_does_not_render_input_widget(self):
