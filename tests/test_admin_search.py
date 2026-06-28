@@ -4,9 +4,11 @@ from pathlib import Path
 from rich.text import Text
 
 from sub2api_usage import (
+    _admin_search_effective_query,
     _admin_search_allows_action,
     _admin_search_status_line,
     _admin_search_suffix,
+    _apply_admin_search_key,
     _handle_admin_search_key,
     _highlight_search_cells,
     _highlight_search_text,
@@ -50,6 +52,20 @@ class AdminSearchTests(unittest.TestCase):
         self.assertFalse(rendered[1].spans)
         self.assertFalse(rendered[2].spans)
 
+    def test_highlight_search_cells_can_mark_entire_matching_row(self):
+        rendered = _highlight_search_cells(
+            [Text("Alice@Example.com"), Text("Engineering"), Text("active")],
+            "alice",
+            full_row=True,
+        )
+
+        self.assertEqual([cell.plain for cell in rendered], ["Alice@Example.com", "Engineering", "active"])
+        for cell in rendered:
+            self.assertTrue(
+                any("black on yellow" in str(span.style) for span in cell.spans),
+                f"{cell.plain!r} was not row-highlighted",
+            )
+
     def test_admin_search_suffix_shows_vim_style_active_query(self):
         rendered = _admin_search_suffix("alice@example.com", 2, active=True)
 
@@ -78,6 +94,27 @@ class AdminSearchTests(unittest.TestCase):
     def test_handle_admin_search_key_enter_commits_and_clears_query(self):
         self.assertEqual(_handle_admin_search_key(False, "", "/", "/"), (True, "", "started"))
         self.assertEqual(_handle_admin_search_key(True, "alice", "enter", None), (False, "", "committed"))
+
+    def test_apply_admin_search_key_commits_filter_but_clears_input(self):
+        active, input_query, applied_query, action = _apply_admin_search_key(
+            True,
+            "alice",
+            "",
+            "enter",
+            None,
+        )
+
+        self.assertFalse(active)
+        self.assertEqual(input_query, "")
+        self.assertEqual(applied_query, "alice")
+        self.assertEqual(action, "committed")
+        self.assertEqual(_admin_search_effective_query(active, input_query, applied_query), "alice")
+
+    def test_apply_admin_search_escape_clears_committed_filter(self):
+        self.assertEqual(
+            _apply_admin_search_key(False, "", "alice", "escape", None),
+            (False, "", "", "cleared"),
+        )
 
     def test_handle_admin_search_key_escape_clears_query(self):
         self.assertEqual(_handle_admin_search_key(True, "alice", "escape", None), (False, "", "cleared"))

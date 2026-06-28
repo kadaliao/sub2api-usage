@@ -25,8 +25,14 @@ pipx install sub2api-usage
 # 默认打开统计面板：今天 / 昨天 / 7 天 / 30 天
 sub2api-usage
 
-# 重新配置账号
+# 配置账号：没有 profile 时直接进入新增；已有 profile 时先选择要修改的 profile 或新增
 sub2api-usage setup
+
+# 明确新增普通 profile
+sub2api-usage profiles add <name>
+sub2api-usage profiles list
+sub2api-usage profiles use <name>
+sub2api-usage profiles remove <name>
 
 # 非交互打印 (脚本 / 管道用)
 # 默认一屏打印今天 / 昨天 / 7 天 / 30 天
@@ -58,8 +64,11 @@ sub2api-usage print --period month --json
 # 首次运行会引导填写管理员邮箱/密码，登录后会校验 role=admin
 sub2api-usage admin
 
-# 配置 / 新增管理员 profile
-sub2api-usage admin setup [name]
+# 配置管理员账号：没有 admin profile 时直接进入新增；已有时先选择要修改的 profile 或新增
+sub2api-usage admin setup
+
+# 明确新增管理员 profile
+sub2api-usage admin profiles add <name>
 
 # 非交互打印
 sub2api-usage admin print --view dashboard

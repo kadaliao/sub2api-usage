@@ -369,7 +369,64 @@ def _prompt(label: str, default: Optional[str] = None, secret: bool = False) -> 
         print("  请输入非空值")
 
 
-async def run_setup(
+def _prompt_new_profile_name(
+    profiles: dict[str, dict[str, str]],
+    default: Optional[str] = None,
+) -> str:
+    while True:
+        name = _prompt("新 profile 名称", default=default).strip()
+        if not name:
+            print("  请输入非空值")
+            continue
+        if name in profiles:
+            print(f"  profile '{name}' 已存在；请选择已有 profile 修改，或换一个新名称")
+            continue
+        return name
+
+
+def _select_profile_for_setup(
+    cfg: dict[str, Any],
+    namespace: str,
+    suggested_name: Optional[str] = None,
+) -> Optional[str]:
+    is_admin = namespace == "admin_profiles"
+    default_key = "admin_default" if is_admin else "default"
+    role_label = "管理员" if is_admin else "账号"
+    profiles: dict[str, dict[str, str]] = dict(cfg.get(namespace) or {})
+
+    print(f"\n== 选择 {role_label} profile ==")
+    print("现有 profile:")
+    names = list(profiles)
+    name_w = max(len(n) for n in names)
+    email_w = max(len(p.get("email", "")) for p in profiles.values())
+    for idx, n in enumerate(names, 1):
+        p = profiles[n]
+        marker = "*" if n == cfg.get(default_key) else " "
+        print(f"  {idx}. {n:<{name_w}} {marker}  {p.get('email', ''):<{email_w}}  {p.get('base_url', '')}")
+    print("  a. 新增 profile")
+    print("\n输入序号/profile 名称选择要修改的 profile；输入 a 新增 profile；输入 q 取消。")
+    while True:
+        default_choice = suggested_name if suggested_name in profiles else cfg.get(default_key) or (names[0] if names else None)
+        choice = _prompt("选择", default=default_choice).strip()
+        lower = choice.lower()
+        if lower in {"q", "quit", "exit"}:
+            print("取消")
+            return None
+        if lower in {"a", "add", "new"}:
+            new_default = suggested_name if suggested_name and suggested_name not in profiles else None
+            if new_default is None and is_admin and "admin" not in profiles:
+                new_default = "admin"
+            return _prompt_new_profile_name(profiles, new_default)
+        if choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(names):
+                return names[idx]
+        if choice in profiles:
+            return choice
+        print(f"  未找到 profile '{choice}'；请输入列表里的序号/名称，或输入 a 新增")
+
+
+async def _edit_profile(
     cfg: Optional[dict[str, Any]] = None,
     name: Optional[str] = None,
     namespace: str = "profiles",
@@ -422,7 +479,7 @@ async def run_setup(
             profiles[profile_name] = entry
             merged = dict(cfg)
             merged[namespace] = profiles
-            return await run_setup(merged, profile_name, namespace)
+            return await _edit_profile(merged, profile_name, namespace)
         raise SystemExit(1)
 
     profiles[profile_name] = entry
@@ -437,6 +494,23 @@ async def run_setup(
         print(f"     当前 default 仍是 '{new_cfg[default_key]}' (用 '{switch_cmd}' 切换)")
     print()
     return new_cfg
+
+
+async def run_setup(
+    cfg: Optional[dict[str, Any]] = None,
+    name: Optional[str] = None,
+    namespace: str = "profiles",
+    *,
+    choose_existing: bool = True,
+) -> dict[str, Any]:
+    cfg = cfg or {}
+    profiles: dict[str, dict[str, str]] = dict(cfg.get(namespace) or {})
+    if choose_existing and profiles:
+        selected = _select_profile_for_setup(cfg, namespace, suggested_name=name)
+        if selected is None:
+            return cfg
+        return await _edit_profile(cfg, selected, namespace)
+    return await _edit_profile(cfg, name, namespace)
 
 
 # ===== Non-interactive print mode ============================================
@@ -1122,19 +1196,23 @@ def _row_matches_search(values: list[Any], query: str) -> bool:
     return any(needle in _search_plain(value).casefold() for value in values)
 
 
-def _highlight_search_text(value: Any, query: str):
+def _highlight_search_text(value: Any, query: str, full_text: bool = False):
     if not query.strip():
         return value
     from rich.text import Text
 
     text = value.copy() if isinstance(value, Text) else Text(_search_plain(value))
+    if full_text:
+        text.stylize("black on yellow", 0, len(text.plain))
+        return text
     pattern = re.escape(query.strip())
     text.highlight_regex(f"(?i){pattern}", "black on yellow")
     return text
 
 
-def _highlight_search_cells(values: list[Any], query: str) -> list[Any]:
-    return [_highlight_search_text(value, query) for value in values]
+def _highlight_search_cells(values: list[Any], query: str, full_row: bool = False) -> list[Any]:
+    should_highlight_row = full_row and _row_matches_search(values, query)
+    return [_highlight_search_text(value, query, full_text=should_highlight_row) for value in values]
 
 
 def _admin_search_suffix(query: str, match_count: int, active: bool = False) -> str:
@@ -1189,6 +1267,27 @@ def _handle_admin_search_key(
     if character and len(character) == 1:
         return True, f"{query}{character}", "changed"
     return active, query, "ignored"
+
+
+def _admin_search_effective_query(active: bool, input_query: str, applied_query: str) -> str:
+    return input_query if active else applied_query
+
+
+def _apply_admin_search_key(
+    active: bool,
+    input_query: str,
+    applied_query: str,
+    key: str,
+    character: Optional[str],
+) -> tuple[bool, str, str, str]:
+    if key == "escape" and (active or input_query or applied_query):
+        return False, "", "", "cleared"
+    next_active, next_input, action = _handle_admin_search_key(active, input_query, key, character)
+    if action == "committed":
+        return next_active, "", input_query, action
+    if action == "cleared":
+        return next_active, "", "", action
+    return next_active, next_input, applied_query, action
 
 
 # ----- Color helpers (used by Admin TUI) ---------------------------------------
@@ -1401,6 +1500,7 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
             self._users_totals: dict[str, dict[str, float]] = {}
             self._subscriptions_cache: dict[str, Any] = {}
             self.search_query = ""
+            self.search_input = ""
             self.searching = False
 
         def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
@@ -1463,26 +1563,30 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
             return self.view in {"users", "subscriptions"}
 
         def _match_count(self) -> int:
-            if not self.search_query.strip():
+            query = self._effective_search_query()
+            if not query.strip():
                 return 0
             if self.view == "users":
                 return sum(
                     1
                     for u in self._users_cache
-                    if _row_matches_search(self._user_search_values(u), self.search_query)
+                    if _row_matches_search(self._user_search_values(u), query)
                 )
             if self.view == "subscriptions":
                 return sum(
                     1
                     for sub in self._subscriptions_cache.get("items") or []
-                    if _row_matches_search(self._subscription_search_values(sub), self.search_query)
+                    if _row_matches_search(self._subscription_search_values(sub), query)
                 )
             return 0
+
+        def _effective_search_query(self) -> str:
+            return _admin_search_effective_query(self.searching, self.search_input, self.search_query)
 
         def _search_suffix(self) -> str:
             if not self._search_enabled():
                 return ""
-            return _admin_search_suffix(self.search_query, self._match_count(), active=self.searching)
+            return _admin_search_suffix(self._effective_search_query(), self._match_count(), active=self.searching)
 
         def _stop_search(self, focus_table: bool = True) -> None:
             self.searching = False
@@ -1498,14 +1602,16 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
             if not self._search_enabled():
                 return
             self.searching = True
+            self.search_input = self.search_query
             self.set_focus(None)
             self._sync_search_ui()
             self._update_status_hint()
 
         async def on_key(self, event) -> None:
             was_searching = self.searching
-            active, query, action = _handle_admin_search_key(
+            active, input_query, applied_query, action = _apply_admin_search_key(
                 self.searching,
+                self.search_input,
                 self.search_query,
                 event.key,
                 getattr(event, "character", None),
@@ -1513,7 +1619,8 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
             if action == "ignored":
                 return
             self.searching = active
-            self.search_query = query
+            self.search_input = input_query
+            self.search_query = applied_query
             if action in {"changed", "committed", "cleared"}:
                 self._rerender_search_view()
             self._update_status_hint()
@@ -1526,9 +1633,10 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
             self.query_one(Tabs).active = v
 
         def _clear_search(self) -> bool:
-            if not self._search_enabled() or (not self.searching and not self.search_query):
+            if not self._search_enabled() or (not self.searching and not self.search_query and not self.search_input):
                 return False
             self.search_query = ""
+            self.search_input = ""
             self._stop_search()
             self._rerender_search_view()
             self._update_status_hint()
@@ -1602,7 +1710,7 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
         def _update_status_hint(self) -> None:
             if self.searching and self._search_enabled():
                 self.query_one("#status", Static).update(
-                    _admin_search_status_line(self.search_query, self._match_count())
+                    _admin_search_status_line(self.search_input, self._match_count())
                 )
                 return
             start, end = period_range(self.period)
@@ -1798,7 +1906,8 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
                         cost_cell(u.get("month_cost")),
                         cost_cell(u.get("all_cost")),
                     ],
-                    self.search_query,
+                    self._effective_search_query(),
+                    full_row=not self.searching,
                 )
                 tbl.add_row(
                     *cells,
@@ -1838,7 +1947,8 @@ def run_admin_tui(cfg: dict[str, str]) -> None:
                         window_cell(_subscription_window_cell(sub, "monthly_usage_usd", "monthly_limit_usd"), 26),
                         expires_cell(sub.get("expires_at")),
                     ],
-                    self.search_query,
+                    self._effective_search_query(),
+                    full_row=not self.searching,
                 )
                 tbl.add_row(
                     *cells,
@@ -1949,6 +2059,8 @@ def build_parser() -> argparse.ArgumentParser:
     pf = sub.add_parser("profiles", help="管理 profile (多账号/多后台)")
     pf_sub = pf.add_subparsers(dest="action")
     pf_sub.add_parser("list", help="列出所有 profile")
+    pa = pf_sub.add_parser("add", help="新增 profile")
+    pa.add_argument("name")
     pu = pf_sub.add_parser("use", help="切换 default profile")
     pu.add_argument("name")
     prm = pf_sub.add_parser("remove", help="删除 profile")
@@ -1979,6 +2091,8 @@ def build_parser() -> argparse.ArgumentParser:
     apf = ap_sub.add_parser("profiles", help="管理 admin profile")
     apf_sub = apf.add_subparsers(dest="admin_action")
     apf_sub.add_parser("list", help="列出所有 admin profile")
+    apa = apf_sub.add_parser("add", help="新增 admin profile")
+    apa.add_argument("name")
     apu = apf_sub.add_parser("use", help="切换 admin default profile")
     apu.add_argument("name")
     aprm = apf_sub.add_parser("remove", help="删除 admin profile")
@@ -2012,10 +2126,13 @@ def _main() -> int:
         return 0
 
     if args.cmd == "profiles":
-        if cfg is None:
-            print("还没有任何 profile，先运行 'sub2api-usage setup'", file=sys.stderr)
-            return 1
         action = args.action or "list"
+        if action == "add":
+            asyncio.run(run_setup(cfg or {}, args.name, choose_existing=False))
+            return 0
+        if cfg is None:
+            print("还没有任何 profile，先运行 'sub2api-usage setup' 或 'sub2api-usage profiles add <name>'", file=sys.stderr)
+            return 1
         if action == "list":
             return cmd_profiles_list(cfg)
         if action == "use":
@@ -2031,7 +2148,7 @@ def _main() -> int:
         if not _can_prompt():
             return _missing_config_error("sub2api-usage setup")
         print("未检测到配置，进入引导...")
-        cfg = asyncio.run(run_setup(None))
+        cfg = asyncio.run(run_setup(None, choose_existing=False))
 
     try:
         _, profile = resolve_profile(cfg, args.profile)
@@ -2058,14 +2175,18 @@ def _admin_main(args: argparse.Namespace, cfg: Optional[dict[str, Any]]) -> int:
     ac = getattr(args, "admin_cmd", None) or ""
 
     if ac == "setup":
-        asyncio.run(run_setup(cfg or {}, getattr(args, "name", None), namespace="admin_profiles"))
+        name = getattr(args, "name", None)
+        asyncio.run(run_setup(cfg or {}, name, namespace="admin_profiles"))
         return 0
 
     if ac == "profiles":
-        if cfg is None or not (cfg.get("admin_profiles") or {}):
-            print("还没有任何 admin profile，先运行 'sub2api-usage admin setup'", file=sys.stderr)
-            return 1
         action = getattr(args, "admin_action", None) or "list"
+        if action == "add":
+            asyncio.run(run_setup(cfg or {}, args.name, namespace="admin_profiles", choose_existing=False))
+            return 0
+        if cfg is None or not (cfg.get("admin_profiles") or {}):
+            print("还没有任何 admin profile，先运行 'sub2api-usage admin setup' 或 'sub2api-usage admin profiles add <name>'", file=sys.stderr)
+            return 1
         if action == "list":
             return cmd_profiles_list(cfg, "admin_profiles")
         if action == "use":
@@ -2078,7 +2199,7 @@ def _admin_main(args: argparse.Namespace, cfg: Optional[dict[str, Any]]) -> int:
         if not _can_prompt():
             return _missing_config_error("sub2api-usage admin setup")
         print("未检测到 admin 配置，进入引导...")
-        cfg = asyncio.run(run_setup(cfg or {}, None, namespace="admin_profiles"))
+        cfg = asyncio.run(run_setup(cfg or {}, None, namespace="admin_profiles", choose_existing=False))
 
     try:
         _, profile = resolve_profile(cfg, args.profile, namespace="admin_profiles")
